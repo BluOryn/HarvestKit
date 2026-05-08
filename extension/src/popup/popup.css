@@ -1,0 +1,165 @@
+:root { color-scheme: light dark; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  width: 480px; max-height: 600px; margin: 0;
+  font: 13px/1.45 'Inter', 'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+  background: #0a0b0e; color: #e8eaed;
+  overflow-y: auto; scrollbar-width: thin; scrollbar-color: #2a2d35 transparent;
+}
+body::-webkit-scrollbar { width: 5px; }
+body::-webkit-scrollbar-thumb { background: #2a2d35; border-radius: 4px; }
+
+/* Header */
+header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 14px; border-bottom: 1px solid #1a1c22;
+  background: linear-gradient(180deg, #0e1015, #0a0b0e);
+  position: sticky; top: 0; z-index: 10;
+}
+.brand { display: flex; align-items: center; gap: 8px; }
+.logo {
+  font-size: 20px; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #2a6df4, #8b5cf6); border-radius: 8px;
+}
+h1 { font-size: 15px; font-weight: 700; letter-spacing: -.3px; }
+.badge {
+  background: linear-gradient(135deg, #1a2235, #1c2535); padding: 4px 10px; border-radius: 10px;
+  font-size: 11px; color: #7eb8ff; font-weight: 600; border: 1px solid #1d2a42;
+}
+
+/* Page Info Bar */
+.page-info {
+  padding: 8px 14px; font-size: 11px; color: #7eb8ff; letter-spacing: .2px;
+  background: linear-gradient(90deg, #0d1520, #0a0f18); border-bottom: 1px solid #1a1c22;
+  display: flex; align-items: center; gap: 6px;
+}
+.page-info::before { content: "●"; font-size: 6px; color: #23b07a; animation: pulse 2s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
+
+/* Actions Section */
+.actions { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; }
+.action-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(105px, 1fr)); gap: 6px; }
+
+.actions button {
+  padding: 8px 10px; border: 1px solid #1d1f26; background: #12141a; color: #c8cdd5;
+  border-radius: 8px; cursor: pointer; font-size: 12px; font-weight: 500;
+  transition: all .15s ease; position: relative; overflow: hidden;
+}
+.actions button:hover {
+  background: #181b24; border-color: #2a2d38; color: #fff; transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,.2);
+}
+.actions button:active { transform: translateY(0); }
+
+.actions button.primary {
+  background: linear-gradient(135deg, #1e5fd0, #2a6df4); border-color: transparent;
+  color: #fff; font-weight: 600; box-shadow: 0 2px 8px rgba(42,109,244,.2);
+}
+.actions button.primary:hover { box-shadow: 0 4px 16px rgba(42,109,244,.35); }
+
+.actions button.danger {
+  background: #1a1015; border-color: #3a1a22; color: #ff8a9a;
+}
+.actions button.danger:hover { background: #2a1520; border-color: #5a2535; }
+
+.actions button.mega {
+  background: linear-gradient(135deg, #f59e0b, #ef4444, #8b5cf6); border: 0;
+  color: #fff; font-weight: 700; font-size: 14px; padding: 14px 18px;
+  border-radius: 10px; text-shadow: 0 1px 3px rgba(0,0,0,.3); letter-spacing: .3px;
+  box-shadow: 0 4px 20px rgba(239,68,68,.2);
+  position: relative; overflow: hidden;
+}
+.actions button.mega::after {
+  content: ""; position: absolute; top: 0; left: -100%; width: 200%; height: 100%;
+  background: linear-gradient(90deg, transparent 25%, rgba(255,255,255,.12) 50%, transparent 75%);
+  animation: shimmer 3s ease-in-out infinite;
+}
+@keyframes shimmer { 0%{left:-100%} 100%{left:100%} }
+.actions button.mega:hover { box-shadow: 0 6px 28px rgba(239,68,68,.35); transform: translateY(-2px); }
+.actions button.mega:disabled { opacity: .6; cursor: wait; animation: none; }
+.actions button.mega:disabled::after { animation: none; }
+
+/* Settings */
+.settings {
+  padding: 6px 14px 10px; display: flex; gap: 14px; font-size: 11px; color: #8b919a;
+  border-bottom: 1px solid #1a1c22;
+}
+.settings label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.settings label:hover { color: #c8cdd5; }
+.settings input[type="checkbox"] {
+  appearance: none; width: 14px; height: 14px; border: 1.5px solid #3a3d45;
+  border-radius: 4px; cursor: pointer; background: #12141a;
+  display: flex; align-items: center; justify-content: center;
+}
+.settings input[type="checkbox"]:checked {
+  background: #2a6df4; border-color: #2a6df4;
+}
+.settings input[type="checkbox"]:checked::after {
+  content: "✓"; color: #fff; font-size: 10px; font-weight: 700;
+}
+
+/* Bulk Section */
+#bulk { padding: 10px 14px; border-top: 1px solid #1a1c22; }
+#bulk.hidden { display: none; }
+#bulk textarea {
+  width: 100%; min-height: 80px; background: #12141a; color: #e8eaed;
+  border: 1px solid #1d1f26; border-radius: 8px; padding: 8px; resize: vertical;
+  font: 11px/1.4 'Fira Code', 'SF Mono', ui-monospace, Menlo, monospace;
+}
+#bulk textarea:focus { border-color: #2a6df4; outline: none; }
+#bulk .row { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+#bulk input[type=number] {
+  width: 58px; background: #12141a; border: 1px solid #1d1f26;
+  border-radius: 6px; color: #fff; padding: 5px 6px; font-size: 12px;
+}
+#bulk input[type=number]:focus { border-color: #2a6df4; outline: none; }
+#bulk-start {
+  background: linear-gradient(135deg, #1e5fd0, #2a6df4); color: white; border: 0;
+  padding: 7px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 12px;
+}
+.muted { color: #6b7280; font-size: 11px; padding: 6px 14px; }
+
+/* Status Bar */
+.status {
+  padding: 6px 14px; min-height: 20px; color: #7eb8ff; font-size: 11px;
+  font-weight: 500; letter-spacing: .1px;
+}
+
+/* Job List */
+main { max-height: 300px; overflow: auto; padding: 4px 8px 10px; }
+.row-job {
+  padding: 10px 12px; border-bottom: 1px solid #131519; display: flex; gap: 10px;
+  border-radius: 8px; margin-bottom: 2px; transition: background .15s;
+}
+.row-job:hover { background: #12141a; }
+.row-job .meta { flex: 1; min-width: 0; }
+.row-job .title {
+  font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 13px; margin-bottom: 2px;
+}
+.row-job .sub {
+  color: #8b919a; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-bottom: 1px;
+}
+.row-job .tag {
+  display: inline-block; background: #181b24; color: #9baab8; font-size: 10px;
+  padding: 2px 6px; border-radius: 4px; margin-right: 3px; margin-top: 2px;
+  border: 1px solid #1d2028;
+}
+.row-job .x {
+  background: transparent; color: #4a4d55; border: 0; cursor: pointer; font-size: 14px;
+  opacity: 0; transition: opacity .15s, color .15s; padding: 0 4px;
+}
+.row-job:hover .x { opacity: 1; }
+.row-job .x:hover { color: #ff6b7a; }
+.row-job a {
+  color: #5b9cf5; text-decoration: none; font-size: 11px;
+}
+.row-job a:hover { text-decoration: underline; color: #7eb8ff; }
+
+/* Empty state */
+main:empty::after {
+  content: "No jobs saved yet. Navigate to a job listing page and click 🔥 Scrape Everything.";
+  display: block; text-align: center; padding: 30px 20px;
+  color: #4a4d55; font-size: 12px; line-height: 1.6;
+}

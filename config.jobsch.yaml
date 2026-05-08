@@ -1,0 +1,34 @@
+run:
+  user_agent: "JobScraperBot/1.0 (+contact@example.com)"
+  delay_seconds: 0.6
+  max_pages: 100            # 100 API pages × 20 = 2000 jobs (covers all 1910)
+  obey_robots: false        # opt-out for testing
+  confirm_permission: true
+  use_playwright: false
+  deep_scrape: true
+  deep_concurrency: 4
+  deep_per_host_concurrency: 2
+  deep_per_host_delay_seconds: 1.0
+  deep_max_retries: 2
+  cache_enabled: true
+  rotate_user_agents: true
+
+keywords:
+  include: []
+  exclude: []
+  sectors: []
+
+locations:
+  include: []
+  exclude: []
+  allow_remote: true
+
+targets:
+  - name: jobs.ch-smoketest
+    url: "https://www.jobs.ch/en/vacancies/?category=106&category=146&category=156&category=167&employment-type=1&employment-type=2&employment-type=4&employment-type=5&publication-date=30&term="
+    adapter: jobs.ch
+
+exports:
+  csv:
+    enabled: true
+    path: "output/jobsch_full.csv"

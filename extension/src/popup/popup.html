@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>JobHarvester</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="logo">⛏</span>
+      <h1>JobHarvester</h1>
+    </div>
+    <div class="badge" id="count">0 jobs</div>
+  </header>
+
+  <div id="page-info" class="page-info">⚪ Detecting page…</div>
+
+  <section class="actions">
+    <button id="btn-full" class="mega">🔥 Scrape Everything</button>
+    <div class="action-row">
+      <button id="btn-extract" class="primary">Scrape this page</button>
+      <button id="btn-list" class="primary">Scrape list (cards)</button>
+      <button id="btn-deep" class="primary">Deep-scrape list</button>
+    </div>
+    <div class="action-row">
+      <button id="btn-bulk">Bulk crawl…</button>
+      <button id="btn-export-csv">Export CSV</button>
+      <button id="btn-export-json">Export JSON</button>
+      <button id="btn-clear" class="danger">Clear</button>
+    </div>
+  </section>
+
+  <section class="settings">
+    <label><input type="checkbox" id="auto-save"> Auto-save when detected</label>
+    <label><input type="checkbox" id="show-banner"> Show in-page banner</label>
+  </section>
+
+  <section id="bulk" class="hidden">
+    <textarea id="bulk-urls" placeholder="One job URL per line — they'll be opened in hidden tabs and extracted"></textarea>
+    <div class="row">
+      <label>Concurrency
+        <input type="number" id="bulk-concurrency" value="3" min="1" max="8" />
+      </label>
+      <button id="bulk-start" class="primary">Start crawl</button>
+    </div>
+    <div id="bulk-progress" class="muted"></div>
+  </section>
+
+  <section class="status" id="status"></section>
+
+  <main id="list"></main>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

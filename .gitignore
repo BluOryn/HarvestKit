@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+
+# Cache + runtime
+.cache/
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+.playwright/
+
+# Output (CSVs are runs, not source)
+output/
+
+# Node / extension
+node_modules/
+extension/dist/
+extension/.parcel-cache/
+*.log
+npm-debug.log*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+.env.*
+*.pem
+service-account*.json
+credentials.json
+
+# Local config
+config.local.yaml
+config.private.yaml
+
+# Claude Code session files
+.claude/
+.serena/

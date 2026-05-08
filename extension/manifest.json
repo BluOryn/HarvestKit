@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "JobHarvester — Universal Job Scraper",
+  "version": "2.0.0",
+  "description": "Detect and extract jobs from any website. JSON-LD, microdata, ATS adapters, list pages, deep crawl, recruiter contacts, salary, tech stack. Local-first.",
+  "permissions": ["storage", "tabs", "scripting", "activeTab", "downloads", "alarms", "sidePanel", "unlimitedStorage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "dist/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["dist/content.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "action": {
+    "default_title": "JobHarvester — open side panel",
+    "default_icon": {
+      "16": "public/icons/icon16.png",
+      "48": "public/icons/icon48.png",
+      "128": "public/icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "dist/sidepanel.html"
+  },
+  "icons": {
+    "16": "public/icons/icon16.png",
+    "48": "public/icons/icon48.png",
+    "128": "public/icons/icon128.png"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/*", "public/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

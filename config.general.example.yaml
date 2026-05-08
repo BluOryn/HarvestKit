@@ -1,0 +1,45 @@
+# General-purpose scraper config — businesses, places, listings.
+# Run with: python run.py --general --config config.general.example.yaml
+#   (or set mode: general here and just `python run.py --config <path>`)
+
+mode: general
+
+run:
+  user_agent: "GeneralScraperBot/1.0 (+contact@example.com)"
+  delay_seconds: 1.0
+  obey_robots: false
+  confirm_permission: true
+  use_playwright: true       # Yelp etc. require JS rendering
+  cache_enabled: true
+  cache_ttl_seconds: 86400
+  cache_path: ".cache/general_http_cache.sqlite"
+  rotate_user_agents: true
+  deep_scrape: true
+
+targets:
+  - name: yelp-clinics-chicago
+    url: "https://www.yelp.com/search?find_desc=Clinics&find_loc=Chicago%2C+IL%2C+United+States"
+    use_playwright: true
+    pagination:
+      param: start
+      step: 10
+      max_pages: 5
+    selectors:
+      card: "div[data-testid='serp-ia-card'], li[class*='businessCard']"
+      title: "a[class*='businessName']"
+      url: "a[class*='businessName']"
+      address: "[class*='secondaryAttributes']"
+      phone: "[class*='phone']"
+      rating: "div[role='img'][aria-label*='star rating']"
+      review_count: "[class*='reviewCount']"
+      price_range: "[class*='priceRange']"
+
+  - name: google-maps-restaurants
+    url: "https://www.google.com/maps/search/restaurants+in+Chicago/"
+    use_playwright: true
+    # No selectors → falls back to JSON-LD ItemList + heuristic card detection.
+
+exports:
+  csv:
+    enabled: true
+    path: "output/general.csv"

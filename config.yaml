@@ -1,0 +1,46 @@
+run:
+  user_agent: "JobScraperBot/1.0 (+contact@example.com)"
+  delay_seconds: 1.0
+  max_pages: 200
+  max_depth: 3
+  obey_robots: true
+  use_playwright: false
+  allow_domains: []
+  confirm_permission: false
+
+keywords:
+  include: ["software", "ai"]
+  exclude: []
+  sectors: ["tech", "product management"]
+
+targets:
+  - name: "example-greenhouse"
+    url: "https://boards.greenhouse.io/example"
+    adapter: "auto"
+  - name: "example-site"
+    url: "https://careers.example.com"
+    adapter: "generic"
+
+exports:
+  csv:
+    enabled: true
+    path: "output/jobs.csv"
+  gsheets:
+    enabled: false
+    service_account_json: "secrets/gsheets.json"
+    spreadsheet_id: ""
+    worksheet: "jobs"
+  notion:
+    enabled: false
+    token: ""
+    database_id: ""
+    property_map:
+      title: "Name"
+      company: "Company"
+      location: "Location"
+      job_url: "Job URL"
+      apply_url: "Apply URL"
+  slack:
+    enabled: false
+    webhook_url: ""
+    max_items: 5

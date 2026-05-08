@@ -1,0 +1,254 @@
+run:
+  user_agent: "Mozilla/5.0 (compatible; JobScraperBot/2.0; +contact@example.com)"
+  delay_seconds: 0.4
+  max_pages: 2000
+  max_depth: 3
+  obey_robots: false
+  use_playwright: false
+  allow_domains: []
+  confirm_permission: true
+
+keywords:
+  include:
+    - software
+    - engineer
+    - developer
+    - backend
+    - frontend
+    - fullstack
+    - full-stack
+    - full stack
+    - data
+    - "machine learning"
+    - ml
+    - ai
+    - "artificial intelligence"
+    - llm
+    - nlp
+    - "computer vision"
+    - mlops
+    - devops
+    - sre
+    - platform
+    - cloud
+    - kubernetes
+    - python
+    - typescript
+    - golang
+    - rust
+    - java
+    - scala
+    - kotlin
+    - android
+    - ios
+    - mobile
+    - security
+    - infosec
+    - "data engineer"
+    - "data scientist"
+    - "data analyst"
+    - "analytics engineer"
+    - "research engineer"
+    - "applied scientist"
+    - genai
+    - "generative ai"
+    - "tech lead"
+    - "staff engineer"
+    - "principal engineer"
+    - architect
+    - cto
+    - "qa engineer"
+    - sdet
+    - embedded
+    - firmware
+    - "hardware engineer"
+    - robotics
+    - quant
+    - softwareentwickler
+    - entwickler
+    - softwareingenieur
+  exclude:
+    - intern
+    - praktikum
+    - werkstudent
+    - "student "
+  sectors: []
+
+locations:
+  include:
+    - germany
+    - deutschland
+    - de
+    - berlin
+    - munich
+    - münchen
+    - muenchen
+    - hamburg
+    - frankfurt
+    - cologne
+    - köln
+    - koeln
+    - stuttgart
+    - düsseldorf
+    - duesseldorf
+    - leipzig
+    - dresden
+    - hannover
+    - hanover
+    - nuremberg
+    - nürnberg
+    - nuernberg
+    - karlsruhe
+    - mannheim
+    - bremen
+    - bonn
+    - heidelberg
+    - aachen
+    - bielefeld
+    - dortmund
+    - essen
+    - duisburg
+    - mainz
+    - kiel
+    - münster
+    - muenster
+    - augsburg
+    - regensburg
+    - freiburg
+    - wolfsburg
+    - ingolstadt
+    - jena
+    - potsdam
+    - erlangen
+    - darmstadt
+    - bavaria
+    - bayern
+    - "north rhine-westphalia"
+    - nrw
+  exclude: []
+  require_match: true
+  allow_remote: false
+
+targets:
+  # ====== AGGREGATOR — covers most of Germany via official BA API ======
+  - {name: arbeitsagentur-software, url: "https://rest.arbeitsagentur.de/?was=Software%20Engineer&wo=Deutschland&size=100&max_pages=25", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-developer, url: "https://rest.arbeitsagentur.de/?was=Software%20Developer&wo=Deutschland&size=100&max_pages=25", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-backend, url: "https://rest.arbeitsagentur.de/?was=Backend%20Developer&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-frontend, url: "https://rest.arbeitsagentur.de/?was=Frontend%20Developer&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-fullstack, url: "https://rest.arbeitsagentur.de/?was=Fullstack%20Developer&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-data-eng, url: "https://rest.arbeitsagentur.de/?was=Data%20Engineer&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-data-scientist, url: "https://rest.arbeitsagentur.de/?was=Data%20Scientist&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-machine-learning, url: "https://rest.arbeitsagentur.de/?was=Machine%20Learning&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-ai, url: "https://rest.arbeitsagentur.de/?was=Artificial%20Intelligence&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-devops, url: "https://rest.arbeitsagentur.de/?was=DevOps&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-sre, url: "https://rest.arbeitsagentur.de/?was=Site%20Reliability&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-cloud, url: "https://rest.arbeitsagentur.de/?was=Cloud%20Engineer&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-platform, url: "https://rest.arbeitsagentur.de/?was=Platform%20Engineer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-python, url: "https://rest.arbeitsagentur.de/?was=Python%20Developer&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-typescript, url: "https://rest.arbeitsagentur.de/?was=Typescript%20Developer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-go, url: "https://rest.arbeitsagentur.de/?was=Golang%20Developer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-java, url: "https://rest.arbeitsagentur.de/?was=Java%20Developer&wo=Deutschland&size=100&max_pages=20", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-react, url: "https://rest.arbeitsagentur.de/?was=React%20Developer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-mobile, url: "https://rest.arbeitsagentur.de/?was=Mobile%20Developer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-android, url: "https://rest.arbeitsagentur.de/?was=Android%20Developer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-ios, url: "https://rest.arbeitsagentur.de/?was=iOS%20Developer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-security, url: "https://rest.arbeitsagentur.de/?was=Security%20Engineer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-architect, url: "https://rest.arbeitsagentur.de/?was=Software%20Architect&wo=Deutschland&size=100&max_pages=15", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-staff, url: "https://rest.arbeitsagentur.de/?was=Staff%20Engineer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-mlops, url: "https://rest.arbeitsagentur.de/?was=MLOps&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-llm, url: "https://rest.arbeitsagentur.de/?was=LLM&wo=Deutschland&size=100&max_pages=5", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-genai, url: "https://rest.arbeitsagentur.de/?was=Generative%20AI&wo=Deutschland&size=100&max_pages=5", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-data-analyst, url: "https://rest.arbeitsagentur.de/?was=Data%20Analyst&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-qa, url: "https://rest.arbeitsagentur.de/?was=QA%20Engineer&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-embedded, url: "https://rest.arbeitsagentur.de/?was=Embedded%20Software&wo=Deutschland&size=100&max_pages=10", adapter: arbeitsagentur}
+  - {name: arbeitsagentur-robotics, url: "https://rest.arbeitsagentur.de/?was=Robotics%20Engineer&wo=Deutschland&size=100&max_pages=5", adapter: arbeitsagentur}
+
+  # ---------- Greenhouse (verified DE-active) ----------
+  - {name: greenhouse-celonis, url: "https://boards.greenhouse.io/celonis", adapter: greenhouse}
+  - {name: greenhouse-n26, url: "https://boards.greenhouse.io/n26", adapter: greenhouse}
+  - {name: greenhouse-getyourguide, url: "https://boards.greenhouse.io/getyourguide", adapter: greenhouse}
+  - {name: greenhouse-hellofresh, url: "https://boards.greenhouse.io/hellofresh", adapter: greenhouse}
+  - {name: greenhouse-zalando, url: "https://boards.greenhouse.io/zalando", adapter: greenhouse}
+  - {name: greenhouse-flixbus, url: "https://boards.greenhouse.io/flix", adapter: greenhouse}
+  - {name: greenhouse-deliveryhero, url: "https://boards.greenhouse.io/deliveryhero", adapter: greenhouse}
+  - {name: greenhouse-trade-republic, url: "https://boards.greenhouse.io/traderepublic", adapter: greenhouse}
+  - {name: greenhouse-solarisbank, url: "https://boards.greenhouse.io/solaris", adapter: greenhouse}
+  - {name: greenhouse-contentful, url: "https://boards.greenhouse.io/contentful", adapter: greenhouse}
+  - {name: greenhouse-personio, url: "https://boards.greenhouse.io/personio", adapter: greenhouse}
+  - {name: greenhouse-omio, url: "https://boards.greenhouse.io/omio", adapter: greenhouse}
+  - {name: greenhouse-raisin, url: "https://boards.greenhouse.io/raisin", adapter: greenhouse}
+  - {name: greenhouse-blinkist, url: "https://boards.greenhouse.io/blinkist", adapter: greenhouse}
+  - {name: greenhouse-mambu, url: "https://boards.greenhouse.io/mambu", adapter: greenhouse}
+  - {name: greenhouse-pitch, url: "https://boards.greenhouse.io/pitch", adapter: greenhouse}
+  - {name: greenhouse-scout24, url: "https://boards.greenhouse.io/scout24", adapter: greenhouse}
+  - {name: greenhouse-spotify, url: "https://boards.greenhouse.io/spotify", adapter: greenhouse}
+  - {name: greenhouse-stripe, url: "https://boards.greenhouse.io/stripe", adapter: greenhouse}
+  - {name: greenhouse-airbnb, url: "https://boards.greenhouse.io/airbnb", adapter: greenhouse}
+  - {name: greenhouse-figma, url: "https://boards.greenhouse.io/figma", adapter: greenhouse}
+  - {name: greenhouse-databricks, url: "https://boards.greenhouse.io/databricks", adapter: greenhouse}
+  - {name: greenhouse-thinkproject, url: "https://boards.greenhouse.io/thinkproject", adapter: greenhouse}
+  - {name: greenhouse-aleph-alpha, url: "https://boards.greenhouse.io/alephalpha", adapter: greenhouse}
+  - {name: greenhouse-deepl, url: "https://boards.greenhouse.io/deepl", adapter: greenhouse}
+  - {name: greenhouse-helsing, url: "https://boards.greenhouse.io/helsing", adapter: greenhouse}
+  - {name: greenhouse-finn, url: "https://boards.greenhouse.io/finnauto", adapter: greenhouse}
+  - {name: greenhouse-amboss, url: "https://boards.greenhouse.io/amboss", adapter: greenhouse}
+  - {name: greenhouse-soundcloud, url: "https://boards.greenhouse.io/soundcloud", adapter: greenhouse}
+  - {name: greenhouse-onfido, url: "https://boards.greenhouse.io/onfido", adapter: greenhouse}
+  - {name: greenhouse-mistral, url: "https://boards.greenhouse.io/mistralai", adapter: greenhouse}
+  - {name: greenhouse-tier, url: "https://boards.greenhouse.io/tier", adapter: greenhouse}
+  - {name: greenhouse-isar-aerospace, url: "https://boards.greenhouse.io/isaraerospace", adapter: greenhouse}
+  - {name: greenhouse-zenjob, url: "https://boards.greenhouse.io/zenjob", adapter: greenhouse}
+  - {name: greenhouse-coachhub, url: "https://boards.greenhouse.io/coachhub", adapter: greenhouse}
+  - {name: greenhouse-personio2, url: "https://boards.greenhouse.io/personio2", adapter: greenhouse}
+
+  # ---------- Lever ----------
+  - {name: lever-quantco, url: "https://jobs.lever.co/quantco", adapter: lever}
+  - {name: lever-staffbase, url: "https://jobs.lever.co/staffbase", adapter: lever}
+  - {name: lever-grover, url: "https://jobs.lever.co/grover", adapter: lever}
+  - {name: lever-ada-health, url: "https://jobs.lever.co/ada", adapter: lever}
+  - {name: lever-medwing, url: "https://jobs.lever.co/medwing", adapter: lever}
+  - {name: lever-clark, url: "https://jobs.lever.co/clark", adapter: lever}
+  - {name: lever-flink, url: "https://jobs.lever.co/goflink", adapter: lever}
+  - {name: lever-dept, url: "https://jobs.lever.co/deptagency", adapter: lever}
+
+  # ---------- Personio ----------
+  - {name: personio-personio, url: "https://personio.jobs.personio.de", adapter: personio}
+  - {name: personio-celonis, url: "https://celonis.jobs.personio.com", adapter: personio}
+  - {name: personio-konux, url: "https://konux.jobs.personio.de", adapter: personio}
+  - {name: personio-sennder, url: "https://sennder.jobs.personio.de", adapter: personio}
+  - {name: personio-wandelbots, url: "https://wandelbots.jobs.personio.de", adapter: personio}
+  - {name: personio-mobimeo, url: "https://mobimeo.jobs.personio.de", adapter: personio}
+  - {name: personio-ottonova, url: "https://ottonova.jobs.personio.de", adapter: personio}
+  - {name: personio-tomorrow, url: "https://tomorrow.jobs.personio.de", adapter: personio}
+  - {name: personio-quantilope, url: "https://quantilope.jobs.personio.de", adapter: personio}
+  - {name: personio-merantixmomentum, url: "https://merantixmomentum.jobs.personio.de", adapter: personio}
+  - {name: personio-mobile-de, url: "https://mobile-de.jobs.personio.de", adapter: personio}
+  - {name: personio-orderbird, url: "https://orderbird.jobs.personio.de", adapter: personio}
+
+  # ---------- Ashby ----------
+  - {name: ashby-langchain, url: "https://jobs.ashbyhq.com/langchain", adapter: ashby}
+  - {name: ashby-tacto, url: "https://jobs.ashbyhq.com/tacto", adapter: ashby}
+  - {name: ashby-kombo, url: "https://jobs.ashbyhq.com/kombo", adapter: ashby}
+  - {name: ashby-cognigy, url: "https://jobs.ashbyhq.com/cognigy", adapter: ashby}
+  - {name: ashby-parloa, url: "https://jobs.ashbyhq.com/parloa", adapter: ashby}
+  - {name: ashby-numa, url: "https://jobs.ashbyhq.com/numa", adapter: ashby}
+  - {name: ashby-evroc, url: "https://jobs.ashbyhq.com/evroc", adapter: ashby}
+  - {name: ashby-mistralai, url: "https://jobs.ashbyhq.com/mistralai", adapter: ashby}
+  - {name: ashby-deepset, url: "https://jobs.ashbyhq.com/deepset", adapter: ashby}
+
+  # ---------- SmartRecruiters (verified) ----------
+  - {name: sr-bosch, url: "https://api.smartrecruiters.com/v1/companies/BoschGroup", adapter: smartrecruiters}
+  - {name: sr-visa, url: "https://api.smartrecruiters.com/v1/companies/Visa", adapter: smartrecruiters}
+  - {name: sr-wayfair, url: "https://api.smartrecruiters.com/v1/companies/Wayfair", adapter: smartrecruiters}
+  - {name: sr-ubisoft, url: "https://api.smartrecruiters.com/v1/companies/Ubisoft2", adapter: smartrecruiters}
+
+  # ---------- Workday (DB confirmed working — others gated; rely on Arbeitsagentur for those) ----------
+  - {name: workday-deutschebank, url: "https://db.wd3.myworkdayjobs.com/en-US/DBWebsite", adapter: workday}
+
+exports:
+  csv:
+    enabled: true
+    path: "output/germany_tech_jobs.csv"
+  gsheets: {enabled: false, service_account_json: "", spreadsheet_id: "", worksheet: "jobs"}
+  notion: {enabled: false, token: "", database_id: "", property_map: {}}
+  slack: {enabled: false, webhook_url: "", max_items: 5}

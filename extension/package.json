@@ -1,0 +1,28 @@
+{
+  "name": "jobharvester-extension",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Universal in-browser job scraper. MV3 + React side panel + Dexie + Zustand.",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "test": "node tests/smoke.mjs"
+  },
+  "dependencies": {
+    "@tanstack/react-virtual": "^3.10.8",
+    "dexie": "^4.0.10",
+    "dexie-react-hooks": "^1.1.7",
+    "lucide-react": "^0.469.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "esbuild": "^0.24.2",
+    "jsdom": "^25.0.1"
+  }
+}
