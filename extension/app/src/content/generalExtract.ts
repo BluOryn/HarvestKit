@@ -11,6 +11,7 @@
  */
 import { emptyRecord, mergeRecords, fingerprintRecord, type GeneralRecord, GENERAL_FIELDS } from "../lib/generalSchema";
 import { clean, flatten, safeJSON } from "../lib/utils";
+import { pickGeneralSite, universalCardExtract, type GeneralCard } from "./generalSites";
 
 const BUSINESS_TYPES = new Set([
   "localbusiness","restaurant","store","shop","hotel","lodging","place",
@@ -135,8 +136,10 @@ export function extractGeneral(): { record: GeneralRecord | null; found: boolean
   const lds = collectJsonLd().filter(isBusiness);
   const parts: Partial<GeneralRecord>[] = [];
   for (const ld of lds) parts.push(fromJsonLd(ld));
+  parts.push(fromMicrodata(document));
   parts.push(fromOpenGraph(document));
   parts.push(fromHeuristics(document));
+  parts.push(fromSiteSpecific(document));
 
   const rec = mergeRecords([emptyRecord(), ...parts.filter(Boolean)]);
   rec.source_url = location.href;
@@ -153,12 +156,102 @@ export function extractGeneral(): { record: GeneralRecord | null; found: boolean
   return { record: rec, found: true };
 }
 
-/** List-page card extraction: returns clickable detail URLs to deep-scrape. */
-export function extractGeneralCards(): { url: string; name: string; address: string; snippet: string }[] {
-  const out: { url: string; name: string; address: string; snippet: string }[] = [];
+/** Microdata extraction: schema.org/{LocalBusiness,Restaurant,Place,Hotel,Store}. */
+function fromMicrodata(root: Document = document): Partial<GeneralRecord> {
+  const r: Partial<GeneralRecord> = {};
+  const scope = root.querySelector("[itemtype*='schema.org/LocalBusiness' i], [itemtype*='schema.org/Restaurant' i], [itemtype*='schema.org/Place' i], [itemtype*='schema.org/Store' i], [itemtype*='schema.org/Hotel' i], [itemtype*='schema.org/Organization' i]");
+  if (!scope) return r;
+  const get = (prop: string) => {
+    const el = scope.querySelector(`[itemprop='${prop}']`) as HTMLElement | null;
+    if (!el) return "";
+    if (el.hasAttribute("content")) return el.getAttribute("content") || "";
+    if (el.tagName === "META") return el.getAttribute("content") || "";
+    if (el.tagName === "A" || el.tagName === "LINK") return el.getAttribute("href") || el.textContent || "";
+    return el.textContent || "";
+  };
+  r.name = clean(get("name"));
+  r.description = clean(get("description"));
+  r.phone = clean(get("telephone") || get("phone"));
+  r.email = clean(get("email"));
+  r.website = clean(get("url") || get("sameAs"));
+  r.image = clean(get("image"));
+  r.price_range = clean(get("priceRange"));
+  r.street_address = clean(get("streetAddress"));
+  r.city = clean(get("addressLocality"));
+  r.region = clean(get("addressRegion"));
+  r.country = clean(get("addressCountry"));
+  r.postal_code = clean(get("postalCode"));
+  r.rating = clean(get("ratingValue"));
+  r.review_count = clean(get("reviewCount") || get("ratingCount"));
+  if (!r.address && (r.street_address || r.city)) {
+    r.address = [r.street_address, r.city, r.region, r.postal_code, r.country].filter(Boolean).join(", ");
+  }
+  return r;
+}
+
+/** Site-specific detail-page selectors. Yelp/Google Maps don't always include
+ *  full Schema.org markup, so pull from their unique class names. */
+function fromSiteSpecific(root: Document = document): Partial<GeneralRecord> {
+  const host = location.hostname;
+  const r: Partial<GeneralRecord> = {};
+  const get = (q: string) => clean((root.querySelector(q) as HTMLElement | null)?.textContent || "");
+
+  if (/yelp\./i.test(host)) {
+    r.name = r.name || get("h1");
+    // Yelp categories (linked elements after the rating)
+    const cats = Array.from(root.querySelectorAll("a[href*='/c/']")).map((a) => clean(a.textContent || "")).filter(Boolean);
+    if (cats.length) r.category = cats.slice(0, 5).join(", ");
+    // Address: <address> or "Get Directions" sibling
+    const addr = root.querySelector("address, p[class*='addressContainer']");
+    if (addr) r.address = clean(addr.textContent || "");
+    // Phone: data-testid or aria-label
+    const phoneEl = root.querySelector("p[class*='phone'], a[href^='tel:']");
+    if (phoneEl) r.phone = clean(phoneEl.textContent || (phoneEl as HTMLAnchorElement).href?.replace(/^tel:/, "") || "");
+    // Website
+    const webA = root.querySelector("a[href^='http']:not([href*='yelp.com'])[role='link']") as HTMLAnchorElement | null;
+    if (webA) r.website = webA.href;
+    // Rating from aria-label
+    const ratingEl = root.querySelector("[role='img'][aria-label*='star']") as HTMLElement | null;
+    if (ratingEl) {
+      const m = (ratingEl.getAttribute("aria-label") || "").match(/[\d.]+/);
+      if (m) r.rating = m[0];
+    }
+    // Review count
+    const rcText = clean(root.body.textContent || "");
+    const rcMatch = rcText.match(/(\d{1,3}(?:,\d{3})*)\s*reviews?\b/i);
+    if (rcMatch) r.review_count = rcMatch[1].replace(/,/g, "");
+    // Hours
+    const hoursTable = root.querySelector("table[class*='hours']");
+    if (hoursTable) r.hours = clean(hoursTable.textContent || "").slice(0, 500);
+  } else if (/google\.[a-z.]+/i.test(host) && /\/maps\//.test(location.pathname)) {
+    r.name = get("h1");
+    r.address = get("button[data-item-id='address']");
+    r.phone = get("button[data-tooltip='Copy phone number']") || get("button[aria-label*='Phone']");
+    const webBtn = root.querySelector("a[data-item-id='authority']") as HTMLAnchorElement | null;
+    if (webBtn) r.website = webBtn.href;
+  }
+  return r;
+}
+
+/**
+ * List-page card extraction. Order of strategies:
+ *   1. Site-specific adapter (yelp, google-maps, tripadvisor, yellowpages)
+ *   2. JSON-LD ItemList (LocalBusiness items)
+ *   3. Universal detail-URL pattern matcher (any /biz/, /place/, /listing/, ...)
+ *   4. Address+phone heuristic (last resort)
+ */
+export function extractGeneralCards(): GeneralCard[] {
+  // 1. Site adapter
+  const adapter = pickGeneralSite();
+  if (adapter) {
+    const cards = adapter.extract(document);
+    if (cards.length >= 2) return cards;
+  }
+
+  const out: GeneralCard[] = [];
   const seen = new Set<string>();
 
-  // Strategy 1: JSON-LD ItemList
+  // 2. JSON-LD ItemList
   for (const item of collectJsonLd()) {
     if (String(item["@type"] || "").toLowerCase() === "itemlist") {
       for (const el of (item.itemListElement || [])) {
@@ -167,14 +260,23 @@ export function extractGeneralCards(): { url: string; name: string; address: str
           const url = x.url || "";
           if (!url || seen.has(url)) continue;
           seen.add(url);
-          out.push({ url, name: clean(x.name || ""), address: clean(typeof x.address === "string" ? x.address : (x.address?.streetAddress || "")), snippet: clean(x.description || "").slice(0, 240) });
+          out.push({
+            url,
+            name: clean(x.name || ""),
+            address: clean(typeof x.address === "string" ? x.address : (x.address?.streetAddress || "")),
+            snippet: clean(x.description || "").slice(0, 240),
+          });
         }
       }
     }
   }
   if (out.length >= 2) return out;
 
-  // Strategy 2: heuristic — repeating siblings with title + address/phone hints.
+  // 3. Universal pattern: any anchor whose URL looks like a business/place detail page.
+  const universal = universalCardExtract(document);
+  if (universal.length >= 2) return universal;
+
+  // 4. Last resort: heuristic — repeating siblings with name + (address OR phone).
   const candidates = document.querySelectorAll("li, article, div[class*='result'], div[class*='card'], div[class*='listing'], div[class*='business'], div[class*='Business']");
   for (const c of Array.from(candidates) as Element[]) {
     const h = c.querySelector("h1, h2, h3, h4, [class*='title'], [class*='name'], [class*='Name']");
@@ -188,7 +290,12 @@ export function extractGeneralCards(): { url: string; name: string; address: str
     const url = a ? new URL(a.getAttribute("href") || "", location.href).href : "";
     if (!url || seen.has(url)) continue;
     seen.add(url);
-    out.push({ url, name, address: clean(addr?.textContent || ""), snippet: clean(c.textContent || "").slice(0, 240) });
+    out.push({
+      url,
+      name,
+      address: clean(addr?.textContent || ""),
+      snippet: clean(c.textContent || "").slice(0, 240),
+    });
   }
   return out;
 }

@@ -14,12 +14,20 @@ export function Dashboard() {
   const [pageInfo, setPageInfo] = useState<any>(null);
   const [scraping, setScraping] = useState(false);
 
-  // Fetch page info on mount
+  // Fetch page info on mount + when mode changes
   useEffect(() => {
-    chrome.runtime.sendMessage({ type: "GET_PAGE_INFO_ACTIVE" }).then((r: any) => {
-      if (r?.ok) setPageInfo(r);
-    }).catch(() => {});
-  }, []);
+    if (mode === "general") {
+      // Probe for general-mode list cards on the active tab
+      chrome.runtime.sendMessage({ type: "EXTRACT_GENERAL_LIST_ACTIVE" }).then((r: any) => {
+        const cards = r?.result?.cards || [];
+        setPageInfo({ ok: true, mode: "general", isList: cards.length > 0, cardCount: cards.length });
+      }).catch(() => {});
+    } else {
+      chrome.runtime.sendMessage({ type: "GET_PAGE_INFO_ACTIVE" }).then((r: any) => {
+        if (r?.ok) setPageInfo({ ...r, mode: "jobs" });
+      }).catch(() => {});
+    }
+  }, [mode]);
 
   const stats = useMemo(() => {
     const total = jobs?.length || 0;
@@ -165,10 +173,18 @@ export function Dashboard() {
         <div className="section" style={{paddingBottom: 4}}>
           <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:"var(--accent)",fontWeight:500}}>
             <Info size={12}/>
-            {pageInfo.isJob && "📄 Job page detected"}
-            {pageInfo.isList && `📋 ${pageInfo.cardCount} jobs found on this page`}
-            {pageInfo.pagination?.type !== "none" && ` · 📄 Pagination: ${pageInfo.pagination.type}`}
-            {!pageInfo.isJob && !pageInfo.isList && "No job content detected"}
+            {pageInfo.mode === "general" ? (
+              pageInfo.isList
+                ? `📋 ${pageInfo.cardCount} business listings found`
+                : "No business listings detected on this page"
+            ) : (
+              <>
+                {pageInfo.isJob && "📄 Job page detected"}
+                {pageInfo.isList && `📋 ${pageInfo.cardCount} jobs found on this page`}
+                {pageInfo.pagination?.type !== "none" && ` · 📄 Pagination: ${pageInfo.pagination.type}`}
+                {!pageInfo.isJob && !pageInfo.isList && "No job content detected"}
+              </>
+            )}
           </div>
         </div>
       )}
