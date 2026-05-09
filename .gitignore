@@ -49,3 +49,7 @@ config.private.yaml
 # Claude Code session files
 .claude/
 .serena/
+
+# Proxy lists (don't expose IPs publicly)
+proxies.txt
+proxies-*.txt

@@ -17,6 +17,7 @@ Design:
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -103,6 +104,9 @@ def deep_scrape_jobs(
             return False, "no-url"
         host = urlparse(url).netloc or "_"
         last_err = ""
+        # Per-host throttle is *also* enforced inside http.get via its own
+        # (host,proxy) bucket; this outer one ensures a sane minimum even when
+        # proxies are absent.
         for attempt in range(cfg.max_retries + 1):
             throttle.acquire(host)
             try:
@@ -121,7 +125,10 @@ def deep_scrape_jobs(
                     last_err = "empty-body"
             else:
                 last_err = "http-fail"
-            time.sleep(min(8.0, 1.5 * (2 ** attempt)))
+            # Exponential backoff with full jitter (AWS guidance):
+            # waits 1-2s, 2-4s, 4-8s, 8-16s, capped at 20s.
+            base = min(20.0, 2.0 * (2 ** attempt))
+            time.sleep(random.uniform(base / 2, base))
 
         # Optional: escalate to Playwright for known-JS sites
         if cfg.use_playwright_fallback and playwright_fetcher is not None:

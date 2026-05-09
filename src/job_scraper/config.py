@@ -26,6 +26,12 @@ class RunConfig:
     cache_ttl_seconds: int = 86400
     cache_path: str = ".cache/http_cache.sqlite"
     rotate_user_agents: bool = True
+    # Proxy rotation: list of "http://user:pass@host:port" or "socks5://host:port".
+    # Empty list = direct connection.
+    proxies: List[str] = field(default_factory=list)
+    proxy_rotation: str = "round_robin"  # round_robin | random
+    proxy_max_failures: int = 3          # mark proxy dead after N consecutive fails
+    proxy_cooldown_seconds: int = 300    # before retrying a dead proxy
 
 
 @dataclass
@@ -123,6 +129,10 @@ def load_config(path: str) -> AppConfig:
         cache_ttl_seconds=run_raw.get("cache_ttl_seconds", RunConfig.cache_ttl_seconds),
         cache_path=run_raw.get("cache_path", RunConfig.cache_path),
         rotate_user_agents=run_raw.get("rotate_user_agents", RunConfig.rotate_user_agents),
+        proxies=run_raw.get("proxies", []) or [],
+        proxy_rotation=run_raw.get("proxy_rotation", RunConfig.proxy_rotation),
+        proxy_max_failures=run_raw.get("proxy_max_failures", RunConfig.proxy_max_failures),
+        proxy_cooldown_seconds=run_raw.get("proxy_cooldown_seconds", RunConfig.proxy_cooldown_seconds),
     )
 
     keywords = KeywordConfig(

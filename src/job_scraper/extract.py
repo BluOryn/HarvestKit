@@ -137,12 +137,20 @@ def _apply_jsonld(j: JobListing, ld: Dict[str, Any]) -> None:
             j.benefits = sects["benefits"]
         if sects.get("recruiter_name") and not j.recruiter_name:
             j.recruiter_name = sects["recruiter_name"]
+        if sects.get("recruiter_title") and not j.recruiter_title:
+            j.recruiter_title = sects["recruiter_title"]
         if sects.get("recruiter_phone") and not j.recruiter_phone:
             j.recruiter_phone = sects["recruiter_phone"]
         if sects.get("recruiter_email") and not j.recruiter_email:
             j.recruiter_email = sects["recruiter_email"]
         if sects.get("apply_url") and not j.apply_url:
             j.apply_url = sects["apply_url"]
+        if sects.get("education_required") and not j.education_required:
+            j.education_required = sects["education_required"]
+        if sects.get("experience_years") and not j.experience_years:
+            j.experience_years = sects["experience_years"]
+        if sects.get("hiring_manager") and not j.hiring_manager:
+            j.hiring_manager = sects["hiring_manager"]
 
     org = ld.get("hiringOrganization")
     if isinstance(org, dict):
@@ -246,9 +254,15 @@ def _apply_jsonld(j: JobListing, ld: Dict[str, Any]) -> None:
         j.apply_url = j.apply_url or apply_action
 
     j.job_url = j.job_url or _str(ld.get("url"))
-    occ = ld.get("occupationalCategory") or ld.get("industry")
+
+    # Schema.org distinguishes occupationalCategory (job function) from industry (employer's sector).
+    # Map them to department vs company_industry respectively.
+    occ = ld.get("occupationalCategory")
     if occ:
         j.department = j.department or _str(occ if not isinstance(occ, list) else ", ".join(map(str, occ)))
+    ind = ld.get("industry")
+    if ind:
+        j.company_industry = j.company_industry or _str(ind if not isinstance(ind, list) else ", ".join(map(str, ind)))
 
     if not j.raw_jsonld:
         try:
@@ -298,9 +312,28 @@ SECTION_PATTERNS: Dict[str, re.Pattern] = {
         r")\b", re.I),
 }
 
-# German recruiter name forms: "Frau Anna Müller", "Herr Max Mustermann"
+# Recruiter name patterns (EN/DE/FR/IT prefixes + bare First Last forms)
 RECRUITER_NAME_RX = re.compile(
-    r"\b(Frau|Herr|Mr\.?|Mrs\.?|Ms\.?)\s+([A-ZÄÖÜ][a-zäöüß]+(?:[\s-][A-ZÄÖÜ][a-zäöüß]+){1,3})\b"
+    r"\b(Frau|Herr|Mr\.?|Mrs\.?|Ms\.?|Dr\.?|Madame|Monsieur|Mme|Mr|Sig\.?|Sig\.ra|Sr\.?|Sra\.?)\s+"
+    r"([A-ZÄÖÜ][a-zäöüß]+(?:[\s-][A-ZÄÖÜ][a-zäöüß]+){1,3})\b"
+)
+# Contextual: name followed by title hint or vice-versa, e.g.
+#   "Anna Müller, HR Manager"  /  "Sebastian Gigla (Recruiter)"
+#   "Talent Acquisition Partner Anna Müller"
+RECRUITER_NAME_TITLE_RX = re.compile(
+    r"([A-ZÄÖÜ][a-zäöüß]+(?:[\s-][A-ZÄÖÜ][a-zäöüß]+){1,3})"  # name
+    r"\s*[,(–\-\|/]\s*"
+    r"(Recruiter|Talent\s+(?:Acquisition|Partner|Manager|Lead)|HR(?:[-\s]Manager| Business Partner| Generalist)?|"
+    r"People\s+(?:Partner|Operations|Manager)|Hiring\s+Manager|Sourcer|Personalleit|"
+    r"HR-Team|Personalabteilung|Personalverantwort|Leiter[\s\w]{0,30}|Head\s+of\s+\w+)"
+)
+# Job-function keywords near recruiter (for backfilling title when only name found)
+RECRUITER_TITLE_HINTS = re.compile(
+    r"\b(Recruiter|Talent\s+(?:Acquisition|Partner|Manager|Lead)|HR\s*Manager|HR\s*Business\s*Partner|"
+    r"HR\s*Generalist|People\s+Partner|People\s+Operations|Hiring\s+Manager|Sourcer|"
+    r"Personalleit|Personalverantwort|HR-Team|Personalabteilung|Leiter\s+HR|"
+    r"Head\s+of\s+(?:HR|People|Talent)|Chef\s+(?:du|de)\s+personnel)\b",
+    re.I,
 )
 # Swiss/EU phone: +41 44 215 15 78 / +49 30 …
 PHONE_INTL_RX = re.compile(r"\+\d{1,3}\s?\d{1,4}\s?\d{2,4}\s?\d{2,4}\s?\d{2,4}")
@@ -335,6 +368,10 @@ def _parse_jd_sections(html: str) -> Dict[str, str]:
                 if kind not in out or len(body) > len(out[kind]):
                     out[kind] = body
             break
+
+    # Education / experience / hiring manager — scan whole HTML body, not just sections
+    full_text = _normalize(soup.get_text(" ", strip=True))
+    _extract_education_experience(full_text, out)
 
     # Apply URL: scan all anchors for "Apply"/"Bewerben" or external ATS host.
     for a in soup.find_all("a", href=True):
@@ -406,19 +443,93 @@ def _collect_section_body(heading: Any) -> str:
 
 
 def _extract_contact_info(html_or_text: str, out: Dict[str, str]) -> None:
-    """From a 'Contact' section (string or HTML), pull recruiter name/email/phone."""
+    """From a 'Contact' section (string or HTML), pull recruiter name/title/email/phone."""
     text = _normalize(html_or_text)
+
+    # 1. Try Name + Title combo first (richest)
+    nt = RECRUITER_NAME_TITLE_RX.search(text)
+    if nt:
+        out.setdefault("recruiter_name", _normalize(nt.group(1)))
+        out.setdefault("recruiter_title", _normalize(nt.group(2)))
+    else:
+        # 2. Bare title hint (no name attached) — e.g. "HR Manager" alone
+        th = RECRUITER_TITLE_HINTS.search(text)
+        if th:
+            out.setdefault("recruiter_title", _normalize(th.group(0)))
+
+    # 3. Frau/Herr-prefixed name
     nm = RECRUITER_NAME_RX.search(text)
-    if nm:
-        out.setdefault("recruiter_name", f"{nm.group(1)} {nm.group(2)}")
+    if nm and not out.get("recruiter_name"):
+        # "Frau Anna Müller" — keep prefix only if it's a real title (Dr.)
+        prefix = nm.group(1)
+        if prefix.startswith("Dr"):
+            out["recruiter_name"] = f"Dr. {nm.group(2)}"
+        else:
+            out["recruiter_name"] = nm.group(2)
+
+    # 4. Phone — prefer international format, fall back to plain
     ph = PHONE_INTL_RX.search(text) or PHONE_RX.search(text)
     if ph:
         candidate = ph.group(0)
         if len(re.sub(r"\D", "", candidate)) >= 7:
-            out.setdefault("recruiter_phone", candidate)
-    em = EMAIL_RX.search(text)
-    if em and not re.search(r"noreply|no-reply|example\.com", em.group(0), re.I):
-        out.setdefault("recruiter_email", em.group(0))
+            out.setdefault("recruiter_phone", _normalize(candidate))
+
+    # 5. Email
+    for cand in EMAIL_RX.findall(text):
+        if re.search(r"noreply|no-reply|example\.com|@sentry", cand, re.I):
+            continue
+        out.setdefault("recruiter_email", cand)
+        break
+
+
+EDUCATION_RX = re.compile(
+    r"\b("
+    r"Bachelor(?:'?s)?(?:\s+(?:degree|of\s+(?:Science|Arts|Engineering)))?|"
+    r"Master(?:'?s)?(?:\s+(?:degree|of\s+(?:Science|Arts|Engineering)))?|"
+    r"M\.?Sc\.?|M\.?Eng\.?|M\.?A\.?|B\.?Sc\.?|B\.?Eng\.?|B\.?A\.?|"
+    r"Ph\.?D\.?|Doctorate|"
+    r"Studium|Diplom|Promotion|Hochschulabschluss|Universitätsabschluss|"
+    r"FH(?:-Abschluss)?|ETH-Abschluss|"
+    r"Lehre|Berufsausbildung|Berufsmatur|Fachhochschule|"
+    r"Apprenticeship|EFZ|Eidg\.?\s+Fähigkeitszeugnis|"
+    r"Licence|Master\s+pro|DEA|DESS|"
+    r"diploma|degree"
+    r")\b",
+    re.I,
+)
+EXPERIENCE_RX = re.compile(
+    r"\b("
+    r"(\d+)\s?\+?\s?(?:-\s?\d+\s?)?(years?|jahre?n?|jahresberufserfahrung|ans|anni)|"
+    r"(?:mind\.?|min(?:imum)?|at\s+least|wenigstens|au\s+moins)\s+(\d+)\s+(?:jahre?|years?|ans|anni)|"
+    r"(\d+)\s+years?\s+(?:of\s+)?(?:experience|erfahrung|exp\.?)|"
+    r"(\d+)\s?\+?\s?(?:jährige|years?\b)"
+    r")",
+    re.I,
+)
+HIRING_MANAGER_RX = re.compile(
+    r"\b(hiring\s+manager|reports?\s+to|berichtet\s+an|vorgesetzt|line\s+manager|"
+    r"direct\s+supervisor|supervisor)\s*[:\-]?\s*"
+    r"([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+){1,3})",
+    re.I,
+)
+
+
+def _extract_education_experience(text: str, out: Dict[str, str]) -> None:
+    if "education_required" not in out:
+        m = EDUCATION_RX.search(text)
+        if m:
+            out["education_required"] = _normalize(m.group(0))
+    if "experience_years" not in out:
+        m = EXPERIENCE_RX.search(text)
+        if m:
+            for grp in m.groups()[1:]:
+                if grp and grp.isdigit():
+                    out["experience_years"] = grp
+                    break
+    if "hiring_manager" not in out:
+        m = HIRING_MANAGER_RX.search(text)
+        if m:
+            out["hiring_manager"] = _normalize(m.group(2))
 
 
 def _resolve_apply_action(ld: Dict[str, Any]) -> str:
@@ -520,14 +631,23 @@ SENIORITY = [
     ("head", re.compile(r"\bhead\s+of\b|\bvp\b|\bcto\b", re.I)),
 ]
 
+# Salary regex — covers EUR/USD/GBP/CHF/SEK/DKK/NOK/PLN/CZK/HUF in CH-formatted numbers
+# (apostrophe / space / narrow-no-break-space / no-break-space thousands separators).
+# Examples it matches:
+#   "CHF 80'000 - 110'000 / Jahr"
+#   "EUR 60.000 – 75.000 pro Jahr"
+#   "$120,000 - $150,000 per year"
+#   "CHF 80 000.– bis 110 000.–"
+_NUM = r"\d{2,3}(?:[.,'\s  ]\d{3})*(?:[.,]\d+)?"
 SALARY_RX = re.compile(
-    r"(?:€|EUR|USD|US\$|\$|£|GBP|CHF|SEK|DKK|NOK|PLN|CZK|HUF)\s?"
-    r"(\d{2,3}(?:[.,\s]\d{3})*(?:[.,]\d+)?)\s?(?:k\b|tausend|thousand)?\s?"
-    r"(?:-|–|to|bis|–)?\s?"
-    r"(?:€|EUR|USD|US\$|\$|£|GBP|CHF|SEK|DKK|NOK|PLN|CZK|HUF)?\s?"
-    r"(\d{2,3}(?:[.,\s]\d{3})*(?:[.,]\d+)?)?\s?"
-    r"(per|/)?\s?"
-    r"(year|yr|p\.a\.|annual|jahr|jährlich|month|mo|monat|monatlich|hour|hr|stunde)?",
+    r"(?:€|EUR|USD|US\$|\$|£|GBP|CHF|Fr\.|SFr\.|SEK|DKK|NOK|PLN|CZK|HUF)\s?"
+    rf"({_NUM})\s?(?:[.,]–|–|–|\.\-|\-|—)?\s?(?:k\b|tausend|thousand)?\s?"
+    r"(?:-|–|—|to|bis|à|a)?\s?"
+    r"(?:€|EUR|USD|US\$|\$|£|GBP|CHF|Fr\.|SFr\.|SEK|DKK|NOK|PLN|CZK|HUF)?\s?"
+    rf"({_NUM})?\s?"
+    r"(?:[.,]–|–|—|\.\-)?\s?"
+    r"(per|/|pro|par|al)?\s?"
+    r"(year|yr|p\.a\.|annual|jahr|jährlich|annee|année|month|mo|monat|monatlich|mois|hour|hr|stunde|heure|ora)?",
     re.I,
 )
 EMAIL_RX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
@@ -571,11 +691,12 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
     if not (j.salary_min or j.salary_max):
         m = SALARY_RX.search(text)
         if m:
-            whole, lo, hi, _, period = m.group(0), m.group(1), m.group(2), m.group(3), m.group(4)
+            whole = m.group(0)
+            lo, hi, period = m.group(1), m.group(2), m.group(4)
             if lo:
-                j.salary_min = lo.replace(" ", "").replace(",", "").replace(".", "")
+                j.salary_min = _normalize_amount(lo)
             if hi:
-                j.salary_max = hi.replace(" ", "").replace(",", "").replace(".", "")
+                j.salary_max = _normalize_amount(hi)
             if not j.salary_currency:
                 if re.search(r"€|EUR", whole, re.I):
                     j.salary_currency = "EUR"
@@ -583,12 +704,15 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
                     j.salary_currency = "USD"
                 elif re.search(r"£|GBP", whole, re.I):
                     j.salary_currency = "GBP"
-                elif re.search(r"CHF", whole, re.I):
+                elif re.search(r"CHF|Fr\.|SFr\.", whole, re.I):
                     j.salary_currency = "CHF"
+                elif re.search(r"SEK", whole, re.I):
+                    j.salary_currency = "SEK"
             if period and not j.salary_period:
-                if re.search(r"month|monat", period, re.I):
+                p = period.lower()
+                if "month" in p or "monat" in p or "mois" in p:
                     j.salary_period = "month"
-                elif re.search(r"hour|hr|stunde", period, re.I):
+                elif "hour" in p or "hr" in p or "stunde" in p or "heure" in p or "ora" in p:
                     j.salary_period = "hour"
                 else:
                     j.salary_period = "year"
@@ -616,6 +740,42 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
     j.benefits = j.benefits or _section_text(soup, re.compile(r"benefits?|perks|wir\s+bieten|what\s+we\s+offer|deine\s+vorteile", re.I))
     if not j.qualifications:
         j.qualifications = j.requirements
+
+    # Skills: dedupe of tech_stack + leading bullet phrases from requirements section
+    if not j.skills:
+        skill_parts: List[str] = []
+        if j.tech_stack:
+            skill_parts.extend([s.strip() for s in j.tech_stack.split(",") if s.strip()])
+        if j.requirements:
+            for bullet in j.requirements.split(" • "):
+                bullet = bullet.strip()
+                if 4 < len(bullet) < 80 and not bullet[0].islower():
+                    skill_parts.append(bullet)
+        if skill_parts:
+            seen_s = set()
+            uniq_skills = []
+            for s in skill_parts:
+                k = s.lower()
+                if k in seen_s:
+                    continue
+                seen_s.add(k)
+                uniq_skills.append(s)
+            j.skills = ", ".join(uniq_skills[:20])
+
+    # Education / experience / hiring manager — fallback regex on full body if not set yet
+    if not (j.education_required and j.experience_years and j.hiring_manager):
+        body_text = (soup.find("body") or soup).get_text(" ", strip=True)[:50000]
+        tmp: Dict[str, str] = {}
+        if j.education_required: tmp["education_required"] = j.education_required
+        if j.experience_years: tmp["experience_years"] = j.experience_years
+        if j.hiring_manager: tmp["hiring_manager"] = j.hiring_manager
+        _extract_education_experience(body_text, tmp)
+        if tmp.get("education_required") and not j.education_required:
+            j.education_required = tmp["education_required"]
+        if tmp.get("experience_years") and not j.experience_years:
+            j.experience_years = tmp["experience_years"]
+        if tmp.get("hiring_manager") and not j.hiring_manager:
+            j.hiring_manager = tmp["hiring_manager"]
 
 
 def _section_text(soup: BeautifulSoup, header_rx: re.Pattern) -> str:
@@ -799,6 +959,23 @@ def _find_apply_url(soup: BeautifulSoup, page_url: str) -> str:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _normalize_amount(s: str) -> str:
+    """Strip thousands separators (apostrophe, space, narrow-no-break-space, no-break-space,
+    period) from a salary number. Keeps decimal point if it's clearly the cents separator
+    (i.e. exactly two digits after, OR a dash for "no cents" CH style)."""
+    if not s:
+        return ""
+    cleaned = s.strip()
+    # Drop trailing CH "no cents" markers
+    cleaned = re.sub(r"[.,]\s*[–—\-]\s*$", "", cleaned)
+    # Detect decimal: last separator with 1-2 digits after
+    m = re.match(r"^(\d{1,3}(?:[.,'\s  ]\d{3})*)([.,]\d{1,2})?$", cleaned)
+    if m:
+        whole = re.sub(r"[.,'\s  ]", "", m.group(1))
+        return whole
+    return re.sub(r"[.,'\s  –—\-]", "", cleaned)
+
 
 def _str(v: Any) -> str:
     if v is None:

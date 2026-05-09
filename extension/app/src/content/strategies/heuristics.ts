@@ -40,6 +40,9 @@ const ONSITE_RX = /\b(on[-\s]?site|in[-\s]?office|vor\s+ort)\b/i;
 const VISA_RX = /\b(visa\s+sponsorship|sponsor\s+(?:your)?\s?visa|h-?1b|blue\s+card)\b/i;
 const RELOC_RX = /relocation\s+(?:support|assistance|package|paid|covered|provided)/i;
 const EQUITY_RX = /\b(equity|stock\s+options?|rsu|esop|share\s+options?)\b/i;
+const EDUCATION_RX = /\b(Bachelor(?:'?s)?|Master(?:'?s)?|M\.?Sc\.?|M\.?Eng\.?|M\.?A\.?|B\.?Sc\.?|B\.?Eng\.?|B\.?A\.?|Ph\.?D\.?|Doctorate|Studium|Diplom|Promotion|Hochschulabschluss|FH(?:-Abschluss)?|ETH-Abschluss|Lehre|Berufsausbildung|Berufsmatur|Fachhochschule|Apprenticeship|EFZ|Licence|Master\s+pro|DEA|DESS|diploma|degree)\b/i;
+const EXPERIENCE_RX = /(\d+)\s?\+?\s?(?:-\s?\d+\s?)?(?:years?|jahre?n?|jahresberufserfahrung|ans|anni)\b/i;
+const HIRING_MANAGER_RX = /\b(?:hiring\s+manager|reports?\s+to|berichtet\s+an|vorgesetzt|line\s+manager|direct\s+supervisor|supervisor)\s*[:\-]?\s*([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+){1,3})/i;
 
 export function fromHeuristics(root: Document = document): Partial<Job> {
   const text = (getText(root.body) || "").slice(0, 200000);
@@ -73,6 +76,13 @@ export function fromHeuristics(root: Document = document): Partial<Job> {
   if (RELOC_RX.test(text)) job.relocation = "yes";
   if (EQUITY_RX.test(text)) job.equity = "yes";
 
+  const eduM = text.match(EDUCATION_RX);
+  if (eduM) job.education_required = clean(eduM[0]);
+  const expM = text.match(EXPERIENCE_RX);
+  if (expM && expM[1]) job.experience_years = expM[1];
+  const hmM = text.match(HIRING_MANAGER_RX);
+  if (hmM && hmM[1]) job.hiring_manager = clean(hmM[1]);
+
   const emails = uniq((text.match(EMAIL_RX) || []).filter((e: string) => !/noreply|no-reply|example\.com/i.test(e)));
   if (emails.length) {
     const recruiter = emails.find((e: string) => /jobs?|career|talent|recruit|hr|hiring|people/i.test(e));
@@ -87,6 +97,27 @@ export function fromHeuristics(root: Document = document): Partial<Job> {
   job.requirements = sectionText(root, /\b(requirement|qualification|what\s+you'?ll\s+need|must[-\s]?have|dein\s+profil|ihr\s+profil|das\s+bringst\s+du\s+mit|das\s+(zeichnet\s+dich\s+aus|sind\s+sie)|so\s+machst\s+du\s+uns\s+happy|damit\s+(begeisterst\s+du|kannst\s+du\s+uns)|das\s+wünschen\s+wir\s+uns|anforderung|profil|qualifikation|was\s+sie\s+(daf(ü|u)r\s+)?mitbringen|votre\s+profil|tu\s+es|nous\s+recherchons|il\s+tuo\s+profilo)\b/i);
   job.benefits = sectionText(root, /\b(benefits?|perks|what\s+we\s+offer|wir\s+bieten|deine\s+vorteile|freue\s+dich\s+auf|damit\s+begeistern\s+wir\s+dich|das\s+bieten\s+wir|haben\s+wir\s+dein\s+interesse|unser\s+angebot|deine\s+benefits|nous\s+offrons|nos\s+avantages|ti\s+offriamo|i\s+nostri\s+vantaggi)\b/i);
   job.qualifications = job.requirements;
+
+  // Skills: dedupe of tech_stack + leading bullet phrases from requirements section
+  const skillParts: string[] = [];
+  if (job.tech_stack) skillParts.push(...job.tech_stack.split(",").map((s: string) => s.trim()).filter(Boolean));
+  if (job.requirements) {
+    for (const bullet of job.requirements.split(" • ")) {
+      const b = bullet.trim();
+      if (b.length > 4 && b.length < 80 && !/^[a-z]/.test(b)) skillParts.push(b);
+    }
+  }
+  if (skillParts.length) {
+    const seen = new Set<string>();
+    const skills: string[] = [];
+    for (const s of skillParts) {
+      const k = s.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      skills.push(s);
+    }
+    job.skills = skills.slice(0, 20).join(", ");
+  }
 
   return job;
 }

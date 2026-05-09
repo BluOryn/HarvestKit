@@ -36,7 +36,22 @@ def main() -> None:
         cache_ttl_seconds=config.run.cache_ttl_seconds,
         cache_path=config.run.cache_path,
         rotate_user_agents=config.run.rotate_user_agents,
+        proxies=config.run.proxies,
+        proxy_rotation=config.run.proxy_rotation,
+        proxy_max_failures=config.run.proxy_max_failures,
+        proxy_cooldown_seconds=config.run.proxy_cooldown_seconds,
     )
+    if http.has_proxies:
+        # With proxies, we can scale per-host concurrency without hitting rate limits.
+        # Each proxy gets its own (host, proxy) bucket via the throttle key.
+        config.run.deep_per_host_concurrency = max(
+            config.run.deep_per_host_concurrency,
+            min(8, len(config.run.proxies)),
+        )
+        config.run.deep_concurrency = max(
+            config.run.deep_concurrency,
+            min(16, len(config.run.proxies) * 2),
+        )
 
     deep_cfg = DeepScrapeConfig(
         concurrency=config.run.deep_concurrency,
