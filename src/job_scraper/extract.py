@@ -643,21 +643,71 @@ def _apply_opengraph(j: JobListing, soup: BeautifulSoup) -> None:
 # ---------------------------------------------------------------------------
 
 TECH_DICT = [
+    # Languages
     "python", "java", "kotlin", "scala", "golang", "rust", "c++", "c#", "typescript", "javascript",
-    "react", "vue", "angular", "svelte", "next.js", "nuxt", "node.js", "express", "fastapi",
-    "django", "flask", "spring", "spring boot",
-    "aws", "gcp", "azure", "kubernetes", "k8s", "docker", "terraform", "ansible", "helm", "istio",
-    "postgres", "postgresql", "mysql", "mongodb", "redis", "elasticsearch", "clickhouse", "snowflake",
-    "bigquery", "redshift", "databricks",
-    "kafka", "rabbitmq", "spark", "airflow", "dbt", "flink", "hadoop",
-    "tensorflow", "pytorch", "jax", "scikit-learn", "huggingface", "transformers", "langchain", "llamaindex",
-    "graphql", "rest", "grpc", "openapi", "swagger",
-    "ci/cd", "jenkins", "github actions", "gitlab ci", "circleci", "argocd",
-    "linux", "bash",
-    "ios", "swift", "objective-c", "android", "jetpack compose", "flutter", "react native",
-    "salesforce", "sap", "servicenow", "oracle", "datadog", "new relic", "grafana", "prometheus", "sentry",
-    "tableau", "power bi", "looker", "metabase", "mixpanel",
-    "openai", "anthropic", "gemini", "llm", "rag", "embeddings", "vector db", "pinecone", "weaviate", "chroma", "qdrant",
+    "ruby", "php", "perl", "haskell", "elixir", "erlang", "lua", "dart", "matlab",
+    "objective-c", "swift", "groovy", "clojure", "f#", "vba", "powershell",
+    # Web frameworks
+    "react", "vue", "vue.js", "angular", "svelte", "sveltekit", "next.js", "nuxt", "nuxt.js",
+    "node.js", "express", "express.js", "nest.js", "nestjs", "fastapi", "django", "flask",
+    "spring", "spring boot", "spring framework", "rails", "ruby on rails", "laravel", "symfony",
+    "asp.net", ".net", "dotnet", "ember", "backbone", "remix", "astro", "qwik", "solid.js",
+    "redux", "mobx", "tailwind", "tailwindcss", "bootstrap", "material-ui", "mui", "chakra",
+    "styled-components", "css", "html", "sass", "scss", "less",
+    # Cloud / Infra
+    "aws", "gcp", "google cloud", "azure", "digitalocean", "heroku", "vercel", "netlify", "cloudflare",
+    "kubernetes", "k8s", "docker", "containerd", "podman", "openshift", "rancher",
+    "terraform", "ansible", "helm", "istio", "linkerd", "envoy", "consul", "vault", "nomad",
+    "pulumi", "cloudformation", "cdk", "serverless", "lambda", "cloud functions",
+    # Databases
+    "postgres", "postgresql", "mysql", "mariadb", "mongodb", "redis", "memcached",
+    "elasticsearch", "opensearch", "clickhouse", "snowflake", "bigquery", "redshift", "databricks",
+    "cassandra", "dynamodb", "couchdb", "couchbase", "neo4j", "arangodb", "scylladb",
+    "oracle", "ms sql", "sql server", "sqlite", "supabase", "firebase", "planetscale",
+    # Streaming / Big Data
+    "kafka", "rabbitmq", "spark", "airflow", "dbt", "flink", "hadoop", "hive", "presto", "trino",
+    "pulsar", "nats", "celery", "kinesis", "eventbridge",
+    # ML / AI
+    "tensorflow", "pytorch", "jax", "scikit-learn", "sklearn", "huggingface", "transformers",
+    "langchain", "llamaindex", "openai", "anthropic", "claude", "gemini", "llm", "rag",
+    "embeddings", "vector db", "pinecone", "weaviate", "chroma", "qdrant", "milvus", "faiss",
+    "numpy", "pandas", "matplotlib", "seaborn", "plotly", "jupyter", "mlflow", "kubeflow",
+    "fastai", "xgboost", "lightgbm", "catboost", "spacy", "nltk", "opencv", "yolo",
+    # APIs / Protocols
+    "graphql", "rest", "grpc", "openapi", "swagger", "soap", "websocket", "webrtc",
+    "oauth", "oidc", "saml", "jwt", "openid",
+    # CI/CD / DevOps
+    "ci/cd", "jenkins", "github actions", "gitlab ci", "circleci", "argocd", "flux",
+    "azure devops", "bamboo", "teamcity", "drone", "tekton", "spinnaker",
+    "linux", "bash", "zsh", "make", "cmake", "gradle", "maven", "npm", "yarn", "pnpm",
+    # Mobile
+    "ios", "android", "jetpack compose", "flutter", "react native", "swiftui", "xamarin",
+    "ionic", "cordova", "capacitor", "kmm", "kotlin multiplatform",
+    # Enterprise
+    "salesforce", "sap", "sap s/4hana", "servicenow", "oracle", "workday", "dynamics 365",
+    "microsoft 365", "sharepoint", "office 365",
+    # Observability / SRE
+    "datadog", "new relic", "grafana", "prometheus", "sentry", "splunk", "elk", "loki",
+    "jaeger", "opentelemetry", "honeycomb", "lightstep", "pagerduty", "opsgenie",
+    # Analytics / BI
+    "tableau", "power bi", "looker", "metabase", "mixpanel", "amplitude", "segment",
+    "snowplow", "rudderstack", "fivetran", "airbyte", "stitch",
+    # Security
+    "owasp", "burp suite", "nessus", "metasploit", "wireshark", "snort", "splunk",
+    "kali", "active directory", "ldap", "kerberos", "siem", "soc", "ids", "ips",
+    "iso 27001", "soc 2", "pci dss", "gdpr",
+    # QA / Testing
+    "selenium", "cypress", "playwright", "puppeteer", "jest", "mocha", "vitest", "junit",
+    "testng", "pytest", "rspec", "cucumber", "appium", "espresso", "xctest", "robotframework",
+    # Methodologies (skills)
+    "agile", "scrum", "kanban", "lean", "tdd", "bdd", "ddd", "microservices", "monolith",
+    "event-driven", "soa", "ci", "cd", "iac", "gitops", "devsecops", "mlops",
+    # CMS / E-commerce
+    "wordpress", "drupal", "joomla", "magento", "shopify", "woocommerce", "contentful",
+    "strapi", "sanity", "prismic", "umbraco",
+    # Misc / Tools
+    "git", "github", "gitlab", "bitbucket", "jira", "confluence", "notion", "slack",
+    "figma", "sketch", "miro", "lucidchart", "draw.io",
 ]
 
 SENIORITY = [
@@ -801,26 +851,22 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
     if not j.qualifications:
         j.qualifications = j.requirements
 
-    # Skills: dedupe of tech_stack + leading bullet phrases from requirements section
-    if not j.skills:
-        skill_parts: List[str] = []
-        if j.tech_stack:
-            skill_parts.extend([s.strip() for s in j.tech_stack.split(",") if s.strip()])
-        if j.requirements:
-            for bullet in j.requirements.split(" • "):
-                bullet = bullet.strip()
-                if 4 < len(bullet) < 80 and not bullet[0].islower():
-                    skill_parts.append(bullet)
-        if skill_parts:
-            seen_s = set()
-            uniq_skills = []
-            for s in skill_parts:
-                k = s.lower()
-                if k in seen_s:
-                    continue
-                seen_s.add(k)
-                uniq_skills.append(s)
-            j.skills = ", ".join(uniq_skills[:20])
+    # Skills: just the tech_stack hits — short, noun-phrase-y, dedup'd.
+    # Stopped synthesizing from JD bullets because Norwegian/German sentences
+    # routinely start with capitals and would pollute the skills field.
+    if not j.skills and j.tech_stack:
+        seen_s = set()
+        uniq_skills = []
+        for s in j.tech_stack.split(","):
+            s = s.strip()
+            if not s:
+                continue
+            k = s.lower()
+            if k in seen_s:
+                continue
+            seen_s.add(k)
+            uniq_skills.append(s)
+        j.skills = ", ".join(uniq_skills[:30])
 
     # Education / experience / hiring manager — fallback regex on full body if not set yet
     if not (j.education_required and j.experience_years and j.hiring_manager):
