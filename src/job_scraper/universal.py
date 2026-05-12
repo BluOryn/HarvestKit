@@ -410,6 +410,8 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
     # ---- Site-specific selectors (improve coverage where universal heuristics miss) ----
     if "arbeidsplassen.nav.no" in parsed.netloc:
         _nav_no_specific(soup, j)
+    elif "karrierestart.no" in parsed.netloc:
+        _karrierestart_specific(soup, j)
 
     # Section parsing — delegate to extract.py's parser (already handles EN/DE/FR/IT/NO)
     from .extract import _parse_jd_sections
@@ -609,6 +611,86 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
         m = re.search(r"\b(\d{4})\b", j.location)
         if m:
             j.postal_code = m.group(1)
+
+
+def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
+    """Pull karrierestart.no-specific labelled fields. Page uses
+    <div class="fact-card-title">Label</div><div class="fact-card-content">Value</div>
+    pairs inside .fact-card containers. Labels are Norwegian.
+    """
+    LABEL_MAP = {
+        "Stillingstype": "employment_type",
+        "Arbeidssted": "location",
+        "Sted": "location",
+        "Bransje": "company_industry",
+        "Antall stillinger": "_skip",
+        "Tiltredelse": "start_date",
+        "Tiltreder": "start_date",
+        "Oppstart": "start_date",
+        "Søknadsfrist": "valid_through",
+        "Frist": "valid_through",
+        "Publisert": "posted_date",
+        "Stillingsfunksjon": "department",
+        "Sektor": "company_industry",
+        "Yrke": "department",
+        "Heltid/Deltid": "employment_type",
+        "Stillingsbrøk": "_employment_pct",
+        "Arbeidsspråk": "language",
+        "Hjemmekontor": "remote_type",
+        "Reisemengde": "travel_required",
+    }
+    for card in soup.select(".fact-card, .fact-grid > div"):
+        title_el = card.select_one(".fact-card-title")
+        content_el = card.select_one(".fact-card-content")
+        if not title_el or not content_el:
+            continue
+        label = _normalize(title_el.get_text(" ", strip=True))
+        value = _normalize(content_el.get_text(" ", strip=True))
+        if not label or not value or len(value) > 200:
+            continue
+        field = LABEL_MAP.get(label)
+        if field is None:
+            # Stash unmapped labels in extras for transparency
+            j.set_extra(f"karrierestart_{label.lower().replace(' ', '_')}", value)
+            continue
+        if field == "_skip":
+            continue
+        if field.startswith("_"):
+            j.set_extra(field.lstrip("_"), value)
+            continue
+        if not getattr(j, field, ""):
+            setattr(j, field, value)
+
+    # Company name often in .company-name / .employer-name
+    if not j.company:
+        for sel in (".company-name", ".employer-name", ".jp-company", "[class*='company-name']"):
+            el = soup.select_one(sel)
+            if el:
+                t = _normalize(el.get_text(" ", strip=True))
+                if t and len(t) < 100:
+                    j.company = t
+                    break
+
+    # Description in main article
+    if not j.description or len(j.description) < 100:
+        for sel in (".job-description", ".jp-description", ".job-content", "article", "main"):
+            el = soup.select_one(sel)
+            if el:
+                t = _normalize(el.get_text(" ", strip=True))
+                if len(t) > 100:
+                    j.description = t[:15000]
+                    break
+
+    # City + postal from location string "Oslo, 0123" or similar
+    if j.location and not j.city:
+        m = re.search(r"\b(\d{4})\s+([A-ZÆØÅa-zæøå\-]+)", j.location)
+        if m:
+            j.postal_code = j.postal_code or m.group(1)
+            j.city = m.group(2)
+        else:
+            # fallback: first comma-separated token
+            j.city = j.location.split(",")[0].strip()
+            # No 4-digit postcode → leave blank
 
 
 def _looks_like_job_page(soup: BeautifulSoup, page_url: str) -> bool:
