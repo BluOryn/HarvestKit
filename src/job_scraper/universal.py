@@ -438,6 +438,15 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
             break
     # Also mine the body text for `Label: value` inline pairs NAV sometimes uses.
     body_txt = soup.get_text(" ", strip=True)
+
+    # Stop words: another label OR a long word break OR end-of-line
+    STOP_LABEL_RX = (
+        r"Stillingstype|Heltid|Deltid|Sektor|Bransje|Arbeidsspr(å|a)k|Antall\s+stillinger|"
+        r"Stillingsbr(ø|o)k|Publisert|S(ø|o)knadsfrist|Frist|Stillingsprosent|Ansettelsesform|"
+        r"Tiltreder|Oppstart|Sted|Beliggenhet|Reisemengde|Hjemmekontor|Kontaktperson|"
+        r"Arbeidssted|Arbeidstid|Arbeidsgiver|Stillingsfunksjon|Yrke|Fagomr(å|a)de|"
+        r"Referansenr|Referanse|Sektor|Stilling$"
+    )
     for label, field in [
         ("Søknadsfrist", "valid_through"),
         ("Frist", "valid_through"),
@@ -448,13 +457,25 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
         ("Oppstart", "start_date"),
         ("Arbeidsspråk", "language"),
         ("Heltid/Deltid", "employment_type"),
+        ("Stillingstype", "employment_type"),
+        ("Reisemengde", "travel_required"),
+        ("Stillingsfunksjon", "department"),
+        ("Yrke", "department"),
+        ("Fagområde", "department"),
+        ("Referansenr.", "requisition_id"),
+        ("Referansenr", "requisition_id"),
+        ("Antall stillinger", "_skip"),  # not in schema
     ]:
-        if getattr(j, field, ""):
+        if field == "_skip" or getattr(j, field, ""):
             continue
-        m = re.search(rf"{re.escape(label)}\s*:\s*([^\n\r]{{2,80}}?)(?=\s{{2,}}|\s+(?:Stillingstype|Heltid|Deltid|Sektor|Bransje|Arbeidsspr|Antall|Stillingsbr|Publisert|Søknadsfrist|Frist|Stillingsprosent|Ansettelsesform|Tiltreder|Oppstart|$))", body_txt, re.I)
+        m = re.search(
+            rf"\b{re.escape(label)}\b\s*:?\s*([^\n\r]{{2,80}}?)(?:\s+(?:{STOP_LABEL_RX})\b|$)",
+            body_txt,
+            re.I,
+        )
         if m:
-            v = m.group(1).strip(" \t:-—")
-            if v and len(v) < 100:
+            v = m.group(1).strip(" \t:-—,;")
+            if v and len(v) < 100 and v.lower() not in ("none", "null", "n/a"):
                 setattr(j, field, v)
 
     # NAV's location string is "<street>, <postal> <city>". Parse for real city.

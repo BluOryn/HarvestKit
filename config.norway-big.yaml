@@ -1,0 +1,88 @@
+# Norway IT 30-day MAX run — multi-keyword across finn + NAV.
+# Each keyword = independent target (NAV returns 25 unique/query, dedupe across keywords).
+
+run:
+  user_agent: "HarvestKitBot/1.0 (+contact@example.com)"
+  delay_seconds: 0.2
+  max_pages: 10            # finn supports pages 1-7; NAV is 1/query so doesn't matter
+  obey_robots: false
+  confirm_permission: true
+  use_playwright: false
+  deep_scrape: true
+  deep_concurrency: 12
+  deep_per_host_concurrency: 6
+  deep_per_host_delay_seconds: 0.3
+  deep_max_retries: 3
+  cache_enabled: true
+  rotate_user_agents: true
+
+keywords:
+  include: []
+  exclude: []
+
+locations:
+  include: []
+  allow_remote: true
+
+targets:
+  # ---- finn.no (single broad search; finn caps anonymous at ~57) ----
+  - name: finn-it
+    url: "https://www.finn.no/job/fulltime/search.html?occupation=0.23&published=30"
+    adapter: finn.no
+
+  # ---- arbeidsplassen.nav.no (25/query — fan out across IT keywords) ----
+  - { name: nav-utvikler,        url: "https://arbeidsplassen.nav.no/stillinger?q=utvikler",        adapter: nav.no }
+  - { name: nav-developer,       url: "https://arbeidsplassen.nav.no/stillinger?q=developer",       adapter: nav.no }
+  - { name: nav-engineer,        url: "https://arbeidsplassen.nav.no/stillinger?q=engineer",        adapter: nav.no }
+  - { name: nav-software,        url: "https://arbeidsplassen.nav.no/stillinger?q=software",        adapter: nav.no }
+  - { name: nav-programmer,      url: "https://arbeidsplassen.nav.no/stillinger?q=programmer",      adapter: nav.no }
+  - { name: nav-systemutvikler,  url: "https://arbeidsplassen.nav.no/stillinger?q=systemutvikler",  adapter: nav.no }
+  - { name: nav-data,            url: "https://arbeidsplassen.nav.no/stillinger?q=data",            adapter: nav.no }
+  - { name: nav-frontend,        url: "https://arbeidsplassen.nav.no/stillinger?q=frontend",        adapter: nav.no }
+  - { name: nav-backend,         url: "https://arbeidsplassen.nav.no/stillinger?q=backend",         adapter: nav.no }
+  - { name: nav-fullstack,       url: "https://arbeidsplassen.nav.no/stillinger?q=fullstack",       adapter: nav.no }
+  - { name: nav-devops,          url: "https://arbeidsplassen.nav.no/stillinger?q=devops",          adapter: nav.no }
+  - { name: nav-cloud,           url: "https://arbeidsplassen.nav.no/stillinger?q=cloud",           adapter: nav.no }
+  - { name: nav-kubernetes,      url: "https://arbeidsplassen.nav.no/stillinger?q=kubernetes",      adapter: nav.no }
+  - { name: nav-aws,             url: "https://arbeidsplassen.nav.no/stillinger?q=aws",             adapter: nav.no }
+  - { name: nav-azure,           url: "https://arbeidsplassen.nav.no/stillinger?q=azure",           adapter: nav.no }
+  - { name: nav-python,          url: "https://arbeidsplassen.nav.no/stillinger?q=python",          adapter: nav.no }
+  - { name: nav-java,            url: "https://arbeidsplassen.nav.no/stillinger?q=java",            adapter: nav.no }
+  - { name: nav-kotlin,          url: "https://arbeidsplassen.nav.no/stillinger?q=kotlin",          adapter: nav.no }
+  - { name: nav-react,           url: "https://arbeidsplassen.nav.no/stillinger?q=react",           adapter: nav.no }
+  - { name: nav-node,            url: "https://arbeidsplassen.nav.no/stillinger?q=node",            adapter: nav.no }
+  - { name: nav-typescript,      url: "https://arbeidsplassen.nav.no/stillinger?q=typescript",      adapter: nav.no }
+  - { name: nav-javascript,      url: "https://arbeidsplassen.nav.no/stillinger?q=javascript",      adapter: nav.no }
+  - { name: nav-golang,          url: "https://arbeidsplassen.nav.no/stillinger?q=golang",          adapter: nav.no }
+  - { name: nav-rust,            url: "https://arbeidsplassen.nav.no/stillinger?q=rust",            adapter: nav.no }
+  - { name: nav-csharp,          url: "https://arbeidsplassen.nav.no/stillinger?q=.NET",            adapter: nav.no }
+  - { name: nav-php,             url: "https://arbeidsplassen.nav.no/stillinger?q=php",             adapter: nav.no }
+  - { name: nav-mobile,          url: "https://arbeidsplassen.nav.no/stillinger?q=mobil",           adapter: nav.no }
+  - { name: nav-android,         url: "https://arbeidsplassen.nav.no/stillinger?q=android",         adapter: nav.no }
+  - { name: nav-ios,             url: "https://arbeidsplassen.nav.no/stillinger?q=ios",             adapter: nav.no }
+  - { name: nav-ai,              url: "https://arbeidsplassen.nav.no/stillinger?q=AI",              adapter: nav.no }
+  - { name: nav-ml,              url: "https://arbeidsplassen.nav.no/stillinger?q=machine+learning", adapter: nav.no }
+  - { name: nav-datascience,     url: "https://arbeidsplassen.nav.no/stillinger?q=data+scientist",  adapter: nav.no }
+  - { name: nav-dataeng,         url: "https://arbeidsplassen.nav.no/stillinger?q=data+engineer",   adapter: nav.no }
+  - { name: nav-security,        url: "https://arbeidsplassen.nav.no/stillinger?q=security",        adapter: nav.no }
+  - { name: nav-sikkerhet,       url: "https://arbeidsplassen.nav.no/stillinger?q=sikkerhet",       adapter: nav.no }
+  - { name: nav-architect,       url: "https://arbeidsplassen.nav.no/stillinger?q=arkitekt",        adapter: nav.no }
+  - { name: nav-architect-en,    url: "https://arbeidsplassen.nav.no/stillinger?q=architect",       adapter: nav.no }
+  - { name: nav-sre,             url: "https://arbeidsplassen.nav.no/stillinger?q=SRE",             adapter: nav.no }
+  - { name: nav-techlead,        url: "https://arbeidsplassen.nav.no/stillinger?q=tech+lead",       adapter: nav.no }
+  - { name: nav-cto,             url: "https://arbeidsplassen.nav.no/stillinger?q=CTO",             adapter: nav.no }
+  - { name: nav-qa,              url: "https://arbeidsplassen.nav.no/stillinger?q=QA",              adapter: nav.no }
+  - { name: nav-tester,          url: "https://arbeidsplassen.nav.no/stillinger?q=tester",          adapter: nav.no }
+  - { name: nav-it-consult,      url: "https://arbeidsplassen.nav.no/stillinger?q=IT+konsulent",    adapter: nav.no }
+  - { name: nav-productmgr,      url: "https://arbeidsplassen.nav.no/stillinger?q=product+manager", adapter: nav.no }
+  - { name: nav-prodeier,        url: "https://arbeidsplassen.nav.no/stillinger?q=produkteier",     adapter: nav.no }
+  - { name: nav-scrum,           url: "https://arbeidsplassen.nav.no/stillinger?q=scrum",           adapter: nav.no }
+  - { name: nav-agile,           url: "https://arbeidsplassen.nav.no/stillinger?q=agile",           adapter: nav.no }
+  - { name: nav-graphql,         url: "https://arbeidsplassen.nav.no/stillinger?q=graphql",         adapter: nav.no }
+  - { name: nav-sql,             url: "https://arbeidsplassen.nav.no/stillinger?q=SQL",             adapter: nav.no }
+  - { name: nav-postgres,        url: "https://arbeidsplassen.nav.no/stillinger?q=postgres",        adapter: nav.no }
+
+exports:
+  csv:
+    enabled: true
+    path: "output/norway_big.csv"

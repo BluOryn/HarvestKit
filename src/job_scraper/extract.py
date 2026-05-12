@@ -279,44 +279,77 @@ def _apply_jsonld(j: JobListing, ld: Dict[str, Any]) -> None:
             j.raw_jsonld = ""
 
 
-# Section header regexes — broad coverage of EN/DE/FR/IT.
+# Section header regexes — broad coverage of EN/DE/FR/IT/NO.
 SECTION_PATTERNS: Dict[str, re.Pattern] = {
     "responsibilities": re.compile(
         r"\b("
+        # EN
         r"responsibilit|what\s+you'?ll\s+do|your\s+role|key\s+(tasks|duties)|"
+        # DE
         r"deine\s+aufgabe|ihre\s+aufgabe|aufgaben|aufgabengebiet|hauptaufgaben|"
         r"das\s+erwartet\s+dich|was\s+(dich|sie)\s+erwartet|was\s+du\s+bewegst|"
         r"damit\s+unterst(ü|u)tzt\s+du\s+uns|dein\s+aufgabenfeld|"
         r"mission|tätigkeitsbereich|"
+        # FR
         r"vos\s+missions|vos\s+responsabilit|tes\s+missions|"
-        r"le\s+tue\s+responsabilit"
+        # IT
+        r"le\s+tue\s+responsabilit|"
+        # NO (Norwegian Bokmål + Nynorsk)
+        r"arbeidsoppgaver|dine\s+arbeidsoppgaver|dine\s+oppgaver|arbeidsoppg|"
+        r"hovedoppgaver|ansvarsomr(å|a)de|stillingen\s+innebærer|"
+        r"sentrale\s+oppgaver|sentrale\s+arbeidsoppgaver|"
+        r"i\s+denne\s+stillingen|du\s+vil|du\s+skal|du\s+kommer\s+til"
         r")\b", re.I),
     "requirements": re.compile(
         r"\b("
+        # EN
         r"requirement|qualification|what\s+you'?ll\s+need|must[-\s]?have|"
+        # DE
         r"dein\s+profil|ihr\s+profil|das\s+bringst\s+du\s+mit|"
         r"das\s+(zeichnet\s+dich\s+aus|sind\s+sie)|so\s+machst\s+du\s+uns\s+happy|"
         r"damit\s+(begeisterst\s+du|kannst\s+du\s+uns)|"
         r"das\s+wünschen\s+wir\s+uns|anforderung|profil|qualifikation|"
         r"was\s+sie\s+(daf(ü|u)r\s+)?mitbringen|"
+        # FR
         r"votre\s+profil|tu\s+es|nous\s+recherchons|"
-        r"il\s+tuo\s+profilo"
+        # IT
+        r"il\s+tuo\s+profilo|"
+        # NO
+        r"(ø|o)nskede\s+(kvalifikasjoner|egenskaper)|"
+        r"kvalifikasjoner|kompetansekrav|krav\s+til\s+stillingen|"
+        r"vi\s+(ø|o)nsker|vi\s+s(ø|o)ker\s+deg|du\s+har|du\s+er|"
+        r"f(ø|o)lgende\s+kvalifikasjoner|kvalifikasjonskrav|"
+        r"personlige\s+egenskaper|vi\s+ser\s+etter|kvalifikasjonene|"
+        r"hvem\s+er\s+du"
         r")\b", re.I),
     "benefits": re.compile(
         r"\b("
-        r"benefits?|perks|what\s+we\s+offer|wir\s+bieten|deine\s+vorteile|"
+        # EN
+        r"benefits?|perks|what\s+we\s+offer|"
+        # DE
+        r"wir\s+bieten|deine\s+vorteile|"
         r"freue\s+dich\s+auf|damit\s+begeistern\s+wir\s+dich|"
         r"das\s+bieten\s+wir|haben\s+wir\s+dein\s+interesse|"
         r"unser\s+angebot|deine\s+benefits|wir\s+sind\s+|"
+        # FR
         r"nous\s+offrons|nos\s+avantages|"
-        r"ti\s+offriamo|i\s+nostri\s+vantaggi"
+        # IT
+        r"ti\s+offriamo|i\s+nostri\s+vantaggi|"
+        # NO
+        r"vi\s+tilbyr|tilbyr|hva\s+(vi|tilbys)|"
+        r"vi\s+kan\s+tilby|fordeler|h(ø|o)res\s+det\s+(ut|spennende)|"
+        r"vil\s+du\s+v(æ|a)re\s+en\s+del|som\s+ansatt\s+hos"
         r")\b", re.I),
     "contact": re.compile(
         r"\b("
         r"contact|kontakt|deine\s+kontakte|haben\s+wir\s+(dein|ihr)\s+interesse|"
         r"bist\s+du\s+(bereit|interessiert)|fragen\s+beantwortet|"
         r"bewerbung|bewerben|jetzt\s+bewerben|interesse\s+geweckt|"
-        r"contactez|postuler"
+        r"contactez|postuler|"
+        # NO
+        r"kontaktperson|kontakt[\s-]?info|for\s+sp(ø|o)rsm(å|a)l|ved\s+sp(ø|o)rsm(å|a)l|"
+        r"sp(ø|o)rsm(å|a)l\s+(om|kan)|tilf(ø|o)r\s+kontaktperson|"
+        r"har\s+du\s+sp(ø|o)rsm(å|a)l|kontakt\s+oss"
         r")\b", re.I),
 }
 
