@@ -692,6 +692,14 @@ def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
             j.city = j.location.split(",")[0].strip()
             # No 4-digit postcode → leave blank
 
+    # Deadline: <span class="jobad-deadline-date">DD.MM.YYYY</span> (not a fact-card)
+    if not j.valid_through:
+        el = soup.select_one(".jobad-deadline-date, .smalljob-deadline-date, [class*='deadline-date']")
+        if el:
+            t = _normalize(el.get_text(" ", strip=True))
+            if re.match(r"^\d{2}\.\d{2}\.\d{2,4}$", t):
+                j.valid_through = t
+
 
 def _looks_like_job_page(soup: BeautifulSoup, page_url: str) -> bool:
     path = urlparse(page_url).path.lower()
