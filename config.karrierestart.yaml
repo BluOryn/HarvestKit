@@ -1,0 +1,23 @@
+run:
+  user_agent: "HarvestKitBot/1.0 (+contact@example.com)"
+  delay_seconds: 0.3
+  max_pages: 1
+  obey_robots: false
+  confirm_permission: true
+  deep_scrape: true
+  deep_concurrency: 4
+  deep_per_host_concurrency: 2
+  deep_per_host_delay_seconds: 0.4
+  deep_max_retries: 2
+  cache_enabled: true
+  rotate_user_agents: true
+
+targets:
+  - name: karrierestart-smoke
+    url: "https://karrierestart.no/jobb/"
+    adapter: karrierestart.no
+
+exports:
+  csv:
+    enabled: true
+    path: "output/karrierestart_smoke.csv"

@@ -30,6 +30,11 @@ targets:
     url: "https://www.finn.no/job/fulltime/search.html?occupation=0.23&published=30"
     adapter: finn.no
 
+  # ---- karrierestart.no broad job feed (paginated; 20/page) ----
+  - name: karrierestart-1
+    url: "https://karrierestart.no/jobb/"
+    adapter: karrierestart.no
+
   # ---- arbeidsplassen.nav.no (25/query — fan out across IT keywords) ----
   - { name: nav-utvikler,        url: "https://arbeidsplassen.nav.no/stillinger?q=utvikler",        adapter: nav.no }
   - { name: nav-developer,       url: "https://arbeidsplassen.nav.no/stillinger?q=developer",       adapter: nav.no }

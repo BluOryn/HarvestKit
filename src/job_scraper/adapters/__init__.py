@@ -7,6 +7,7 @@ from .ashby import AshbyAdapter
 from .base import BaseAdapter
 from .finn import FinnNoAdapter
 from .generic import GenericAdapter
+from .karrierestart import KarrierestartAdapter
 from .greenhouse import GreenhouseAdapter
 from .jobsch import JobsChAdapter
 from .lever import LeverAdapter
@@ -32,6 +33,7 @@ ADAPTERS: Dict[str, BaseAdapter] = {
     "jobs.ch": JobsChAdapter(),
     "finn.no": FinnNoAdapter(),
     "nav.no": NavNoAdapter(),
+    "karrierestart.no": KarrierestartAdapter(),
     "generic": GenericAdapter(),
 }
 
@@ -70,4 +72,6 @@ def _detect_adapter(url: str) -> str:
         return "finn.no"
     if "arbeidsplassen.nav.no" in host or host == "arbeidsplassen.nav.no":
         return "nav.no"
+    if "karrierestart.no" in host:
+        return "karrierestart.no"
     return "generic"
