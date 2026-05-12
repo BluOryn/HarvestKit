@@ -112,6 +112,23 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
     section = _find_contact_section(soup)
     if section:
         out["contact_section_text"] = section[:600]
+        # NAV often gives us a contact section that ALREADY starts with the
+        # person's name (because the heading "Kontaktperson" sits OUTSIDE the
+        # block). Two patterns:
+        #   (a) "Kontaktperson for stillingen <Name> <Role>"
+        #   (b) Bare:                       "<Name> <Role> +47 <phone>"
+        m = re.search(r"Kontaktperson(?:\s+for\s+stillingen)?\s+([^\d+@]{5,120}?)(?=\+?\d{2}\s?\d{2}|@|telefon|email|e-post|$)", section, re.I)
+        if m:
+            head = m.group(1).strip()
+        else:
+            # Try to parse the section directly — strip leading whitespace + handle
+            # case where section begins with the person name.
+            head = section
+        name, role = _split_name_role(head.strip())
+        if name and len(name.split()) >= 2 and not re.search(r"(personvern|cookies|tilgjengeligh)", name, re.I):
+            out["recruiter_name"] = name
+            if role and len(role) >= 3:
+                out["recruiter_title"] = role
         # finn.no & some Norwegian boards use the literal label "Stillingstittel" as
         # a separator: "Kontaktperson : <NAME> Stillingstittel : <ROLE>"
         # Capture the name when this pattern appears.
@@ -143,17 +160,17 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
             re.I,
         )
         company_suffix_rx = re.compile(r"(group|holding|inc|ltd|gmbh|as|asa|ab|s\.a\.|nv|bv|llc|llp|plc|ag|sa|gbr)\b", re.I)
-        for cand in ns:
-            parts = cand.split()
-            if len(parts) < 2:
-                continue
-            # Reject if ANY token is a label like "Stillingstittel" / "Telefonnummer".
-            if any(bad_label_rx.match(p) for p in parts):
-                continue
-            if company_suffix_rx.search(cand):
-                continue
-            out["recruiter_name"] = cand
-            break
+        if "recruiter_name" not in out:  # don't overwrite earlier NAV/finn extraction
+            for cand in ns:
+                parts = cand.split()
+                if len(parts) < 2:
+                    continue
+                if any(bad_label_rx.match(p) for p in parts):
+                    continue
+                if company_suffix_rx.search(cand):
+                    continue
+                out["recruiter_name"] = cand
+                break
         # Section-local phone/email
         sec_phones = [
             _normalize_phone(p) for p in (NO_PHONE_RX.findall(section) if country_hint == "NO" else PHONE_RX.findall(section))
@@ -198,6 +215,49 @@ def _find_contact_section(soup: BeautifulSoup) -> str:
         end = min(len(text), m.end() + 800)
         return text[start:end]
     return ""
+
+
+ROLE_HINT_RX = re.compile(
+    r"\b(leder|sjef|direktør|direktor|seksjonssjef|avdelingsleder|"
+    r"konsulent|spesialist|senioringeniør|ingeniør|rådgiver|"
+    r"manager|partner|head|chief|owner|coordinator|recruiter|"
+    r"talent|hr|sykepleier|lege|teamleder|prosjektleder|sjefen|"
+    r"medarbeider|representant|developer|engineer|architect|"
+    r"founder|cto|ceo|cmo|cfo|coo|cio)",
+    re.I,
+)
+
+
+def _split_name_role(text: str) -> Tuple[str, str]:
+    """Given a contact line like 'Magnus Millenvik Leder digitalisering...',
+    split into (name, role). Uses Norwegian role keywords + capitalization
+    rules. Returns ('', '') if no name detected.
+    """
+    text = text.strip()
+    if not text:
+        return "", ""
+    m = re.match(r"^([A-ZÆØÅ][a-zæøå'\-]+(?:\s+[A-ZÆØÅ][a-zæøå'\-]+)*)(?:\s+(.*))?$", text)
+    if not m:
+        # Names with hyphens (Ann-Helen Holtet)
+        m = re.match(r"^([A-ZÆØÅ][a-zæøå'\-]+(?:[\s\-][A-ZÆØÅa-zæøå'\-]+)*)(?:\s+(.*))?$", text)
+        if not m:
+            return "", ""
+    chain = m.group(1).split()
+    rest = m.group(2) or ""
+    cut = len(chain)
+    for i, tok in enumerate(chain):
+        if ROLE_HINT_RX.match(tok):
+            cut = i
+            break
+    name = " ".join(chain[:cut]) if cut > 0 else " ".join(chain[:3])
+    role_chunks = chain[cut:] + rest.split()
+    role_text = " ".join(role_chunks)
+    # Truncate role at first phone-like token or trailing icon labels.
+    role_m = re.match(r"^(.+?)\s*(?:\+?\d[\d\s\-]{6,}|Kopier|telefon:|tel:|mob:|email|e-post|@)", role_text, re.I)
+    role = (role_m.group(1) if role_m else role_text).strip(" ,;:")
+    if len(role) > 120:
+        role = role[:120]
+    return name, role
 
 
 def _normalize_phone(raw: str) -> str:
