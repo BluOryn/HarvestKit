@@ -376,45 +376,94 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
 
 
 def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
-    """Pull NAV-specific labelled fields like Arbeidsgiver / Sted / Søknadsfrist.
-
-    NAV renders fields as a dt/dd-style pattern where the label heading is a
-    text node followed by an SVG icon, then the value sits in a sibling div.
+    """Pull NAV-specific labelled fields. NAV uses proper <dl>/<dt>/<dd>
+    structure on detail pages — that's the primary path. We also fall back to
+    text-node label matching for label/value pairs outside <dl>.
     """
-    text_blocks = soup.find_all(["div", "dl", "dd", "section"])
-    label_map = {
-        "Arbeidsgiver": "company",
-        "Sted": "location",
-        "Stillingstype": "employment_type",
-        "Heltid/Deltid": "employment_type",
-        "Stillingsbrøk": "employment_type",
-        "Søknadsfrist": "valid_through",
-        "Publisert": "posted_date",
+    # --- Strategy 1: structured <dl>/<dt>/<dd> pairs (most reliable) ---
+    DL_LABEL_MAP = {
+        "Stillingstittel": "_role_title",            # role title — different from job title
+        "Type ansettelse": "employment_type",
+        "Arbeidstid": "_work_hours",
+        "Antall stillinger": "_skip",
+        "Stillingsbrøk": "_employment_pct",
         "Sektor": "company_industry",
         "Bransje": "company_industry",
+        "Stillingsfunksjon": "department",
+        "Yrke": "department",
+        "Fagområde": "department",
+        "Arbeidsspråk": "language",
+        "Nettsted": "company_website",
+        "Stillingsnummer": "external_id",
+        "Sist endret": "posted_date",
+        "Hentet fra": "_ats_source",
+        "Referanse": "requisition_id",
+        "Søknadsfrist": "valid_through",
+        "Frist": "valid_through",
+        "Tiltreder": "start_date",
+        "Oppstart": "start_date",
+        "Reisemengde": "travel_required",
     }
-    # JS / framework noise patterns to reject
-    junk_rx = re.compile(r"^(self\.__next_f|window\.|var\s|function\s|null\s*$|undefined\s*$)", re.I)
+    for dl in soup.find_all("dl"):
+        dts = dl.find_all("dt")
+        dds = dl.find_all("dd")
+        if not dts or not dds:
+            continue
+        for dt, dd in zip(dts, dds):
+            label = _normalize(dt.get_text(" ", strip=True))
+            value = _normalize(dd.get_text(" ", strip=True))
+            if not label or not value:
+                continue
+            field = DL_LABEL_MAP.get(label)
+            if not field or field == "_skip":
+                # Store any non-mapped label in extras
+                if value and len(value) < 500:
+                    j.set_extra(f"nav_{label.lower().replace(' ', '_')}", value)
+                continue
+            if field.startswith("_"):
+                # internal — stash in extras
+                j.set_extra(field.lstrip("_"), value)
+                continue
+            cur = getattr(j, field, "")
+            if not cur:
+                setattr(j, field, value)
 
-    def _is_plausible_value(txt: str) -> bool:
-        if not txt or len(txt) > 200:
-            return False
-        if junk_rx.match(txt):
-            return False
-        if txt.startswith("{") or txt.startswith("["):
-            return False
-        return True
+    # --- Strategy 2: <h3> heading + next sibling div (NAV sometimes uses this) ---
+    for h3 in soup.find_all(["h2", "h3"]):
+        label = _normalize(h3.get_text(" ", strip=True))
+        if not label or label not in DL_LABEL_MAP:
+            continue
+        # Walk forward to find a small text block
+        for sib in h3.next_siblings:
+            if not getattr(sib, "name", None):
+                continue
+            txt = _normalize(sib.get_text(" ", strip=True))
+            if 2 < len(txt) < 200 and not txt.startswith(("Stillingstittel", "Type ansettelse")):
+                field = DL_LABEL_MAP[label]
+                if field.startswith("_") or field == "_skip":
+                    continue
+                cur = getattr(j, field, "")
+                if not cur:
+                    setattr(j, field, txt)
+                break
 
-    for label, field in label_map.items():
-        # Match label as a string node — allow surrounding whitespace + optional colon
-        rx = re.compile(rf"^\s*{re.escape(label)}\s*:?\s*$", re.I)
-        # First try exact-string match (best precision)
-        targets = list(soup.find_all(string=rx))
-        # Fall back to startswith match for cases where label is followed by inline content
-        if not targets:
-            rx2 = re.compile(rf"^\s*{re.escape(label)}\b", re.I)
-            targets = [s for s in soup.find_all(string=rx2) if len((s or "").strip()) < 80]
-        for el in targets:
+
+    # Sibling-matcher for header-style labels (Arbeidsgiver, Sted) that NAV
+    # renders as a heading text node followed by SVG + nested content blocks.
+    # WHITE-LIST only — to avoid the "Del annonsen" leak.
+    header_label_map = {
+        "Arbeidsgiver": "company",
+        "Sted": "location",
+    }
+    button_words_rx = re.compile(
+        r"\b(Del annonsen|Lagre|Følg|Kopier|Send|Søk her|Vis kart|Tilbake|Neste|"
+        r"Forrige|Last ned|Skriv ut|Logg inn)\b", re.I,
+    )
+    for label, field in header_label_map.items():
+        if getattr(j, field, ""):
+            continue
+        rx = re.compile(rf"^\s*{re.escape(label)}\s*$", re.I)
+        for el in soup.find_all(string=rx):
             if not el or not el.parent:
                 continue
             ancestor = el.parent
@@ -423,20 +472,27 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
                 for sib in ancestor.find_next_siblings():
                     if not getattr(sib, "get_text", None):
                         continue
-                    txt = sib.get_text(" ", strip=True)
-                    if _is_plausible_value(txt):
-                        value = txt
-                        break
+                    txt = re.sub(r"\s+", " ", sib.get_text(" ", strip=True)).strip()
+                    if not txt or len(txt) > 250:
+                        continue
+                    if button_words_rx.search(txt):
+                        continue
+                    if re.search(r"\b(Stillingstittel|Stillingsnummer|Søknadsfrist|"
+                                 r"Kontaktperson|Sist endret|Referansenr|Antall stillinger|"
+                                 r"Type ansettelse|Arbeidstid|Sektor|Bransje|Nettsted|"
+                                 r"Stillingsfunksjon)\b", txt, re.I):
+                        continue
+                    value = txt
+                    break
                 if value:
-                    cur = getattr(j, field, "")
-                    if not cur:
-                        setattr(j, field, value)
+                    setattr(j, field, value)
                     break
                 if ancestor.parent is None:
                     break
                 ancestor = ancestor.parent
             break
-    # Also mine the body text for `Label: value` inline pairs NAV sometimes uses.
+
+    # Mine body text for `Label: value` inline pairs NAV uses outside <dl>.
     body_txt = soup.get_text(" ", strip=True)
 
     # Stop words: another label OR a long word break OR end-of-line
@@ -447,36 +503,38 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
         r"Arbeidssted|Arbeidstid|Arbeidsgiver|Stillingsfunksjon|Yrke|Fagomr(å|a)de|"
         r"Referansenr|Referanse|Sektor|Stilling$"
     )
-    for label, field in [
-        ("Søknadsfrist", "valid_through"),
-        ("Frist", "valid_through"),
-        ("Publisert", "posted_date"),
-        ("Stillingsprosent", "employment_type"),
-        ("Ansettelsesform", "employment_type"),
-        ("Tiltreder", "start_date"),
-        ("Oppstart", "start_date"),
-        ("Arbeidsspråk", "language"),
-        ("Heltid/Deltid", "employment_type"),
-        ("Stillingstype", "employment_type"),
-        ("Reisemengde", "travel_required"),
-        ("Stillingsfunksjon", "department"),
-        ("Yrke", "department"),
-        ("Fagområde", "department"),
-        ("Referansenr.", "requisition_id"),
-        ("Referansenr", "requisition_id"),
-        ("Antall stillinger", "_skip"),  # not in schema
-    ]:
-        if field == "_skip" or getattr(j, field, ""):
+    # Each entry: (label, field, value_pattern). Value pattern guarantees we
+    # only accept plausible content (date / pct / role / etc.) — prevents the
+    # regex from grabbing the next label's text or button labels like "Del annonsen".
+    fallback_specs = [
+        ("Søknadsfrist", "valid_through", r"(\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2}|snarest|løpende|fortløpende|umiddelbart)"),
+        ("Frist", "valid_through", r"(\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2})"),
+        ("Publisert", "posted_date", r"(\d{1,2}\.\s*\w+\s*\d{4}|\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2})"),
+        ("Stillingsprosent", "employment_type", r"(\d{1,3}\s?%\s*(?:fast|midlertidig|vikariat)?[\w\s]{0,30})"),
+        ("Ansettelsesform", "employment_type", r"([A-ZÆØÅa-zæøå][^,\n]{2,50})"),
+        ("Tiltreder", "start_date", r"([A-ZÆØÅa-zæøå0-9][^\n]{2,50})"),
+        ("Oppstart", "start_date", r"([A-ZÆØÅa-zæøå0-9][^\n]{2,50})"),
+        ("Arbeidsspråk", "language", r"([A-ZÆØÅa-zæøå][^,\n]{2,50})"),
+        ("Stillingsfunksjon", "department", r"([A-ZÆØÅa-zæøå][^\n]{3,80})"),
+        ("Yrke", "department", r"([A-ZÆØÅa-zæøå][^\n]{3,80})"),
+        ("Fagområde", "department", r"([A-ZÆØÅa-zæøå][^\n]{3,80})"),
+        ("Reisemengde", "travel_required", r"([A-ZÆØÅa-zæøå0-9][^\n]{2,80})"),
+        ("Referansenr\\.?", "requisition_id", r"([A-Za-z0-9_\-]{3,40})"),
+    ]
+    for label, field, vp in fallback_specs:
+        if getattr(j, field, ""):
             continue
         m = re.search(
-            rf"\b{re.escape(label)}\b\s*:?\s*([^\n\r]{{2,80}}?)(?:\s+(?:{STOP_LABEL_RX})\b|$)",
+            rf"\b{label}\b\s*:?\s*{vp}",
             body_txt,
             re.I,
         )
         if m:
             v = m.group(1).strip(" \t:-—,;")
             if v and len(v) < 100 and v.lower() not in ("none", "null", "n/a"):
-                setattr(j, field, v)
+                # Reject if the captured value is itself a stop-label
+                if not re.search(rf"^(?:{STOP_LABEL_RX})$", v, re.I):
+                    setattr(j, field, v)
 
     # NAV's location string is "<street>, <postal> <city>". Parse for real city.
     if j.location and not j.city:
