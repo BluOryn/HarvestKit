@@ -32,6 +32,15 @@ class RunConfig:
     proxy_rotation: str = "round_robin"  # round_robin | random
     proxy_max_failures: int = 3          # mark proxy dead after N consecutive fails
     proxy_cooldown_seconds: int = 300    # before retrying a dead proxy
+    # LLM-fallback adapter — when heuristic extractor fills < llm_min_fields fields,
+    # call Anthropic Haiku to infer schema mapping. Cached per host in selector DB.
+    llm_fallback_enabled: bool = False
+    llm_api_key: str = ""                # set via env ANTHROPIC_API_KEY if blank
+    llm_model: str = "claude-haiku-4-5-20251001"
+    llm_min_fields: int = 5              # trigger LLM if fewer non-empty fields filled
+    llm_max_html_chars: int = 60000      # truncate HTML before sending
+    llm_cache_path: str = ".cache/llm_selectors.sqlite"
+    llm_monthly_budget_usd: float = 5.0  # hard cap; track via cache
 
 
 @dataclass
@@ -133,6 +142,13 @@ def load_config(path: str) -> AppConfig:
         proxy_rotation=run_raw.get("proxy_rotation", RunConfig.proxy_rotation),
         proxy_max_failures=run_raw.get("proxy_max_failures", RunConfig.proxy_max_failures),
         proxy_cooldown_seconds=run_raw.get("proxy_cooldown_seconds", RunConfig.proxy_cooldown_seconds),
+        llm_fallback_enabled=run_raw.get("llm_fallback_enabled", RunConfig.llm_fallback_enabled),
+        llm_api_key=run_raw.get("llm_api_key", RunConfig.llm_api_key),
+        llm_model=run_raw.get("llm_model", RunConfig.llm_model),
+        llm_min_fields=run_raw.get("llm_min_fields", RunConfig.llm_min_fields),
+        llm_max_html_chars=run_raw.get("llm_max_html_chars", RunConfig.llm_max_html_chars),
+        llm_cache_path=run_raw.get("llm_cache_path", RunConfig.llm_cache_path),
+        llm_monthly_budget_usd=run_raw.get("llm_monthly_budget_usd", RunConfig.llm_monthly_budget_usd),
     )
 
     keywords = KeywordConfig(

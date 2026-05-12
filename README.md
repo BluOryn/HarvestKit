@@ -1,176 +1,213 @@
 # HarvestKit
 
-> Universal job + business scraper. Python CLI engine + Chrome MV3 extension share a 60-field schema.
+> Universal scraper — works on **any website** (job boards, business directories, listings). Python CLI + Chrome extension share the same 60-field schema.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-green.svg)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 
-HarvestKit is a dual-mode scraper: a **Python CLI** for headless harvesting at scale, and a **Chrome MV3 extension** for one-click capture from any open tab. Both write to the same 60-column schema, so CSVs from one are drop-in for the other.
+HarvestKit harvests structured data from any site. It tries every extraction strategy in order until one works:
 
-It is **API-first** — Greenhouse / Lever / Ashby / Workday / Personio / Recruitee / Workable / SmartRecruiters / Arbeitsagentur / jobs.ch hit native JSON endpoints when available. Everything else falls through a structured pipeline: JSON-LD `JobPosting` → microdata → OpenGraph → DOM heuristics → recruiter contact mining. A separate **general mode** scrapes Yelp-style business directories using `LocalBusiness` / `Restaurant` Schema.org.
+1. **Native API** (Greenhouse / Lever / Ashby / Workday / Personio / Recruitee / Workable / SmartRecruiters / Arbeitsagentur / jobs.ch / finn / NAV / karrierestart)
+2. **Schema.org JSON-LD** (JobPosting / LocalBusiness / Restaurant / Product)
+3. **Microdata + OpenGraph** tags
+4. **Universal smart-DOM** (label/value pairs, dl/dt/dd, definition lists, semantic classes)
+5. **HR contact mining** (multi-lang regex EN/DE/FR/IT/NO — phone, email, recruiter name + title)
+6. **LLM-fallback** (Anthropic Haiku auto-learns CSS selectors for unknown hosts, caches them — covers brand-new sites with zero adapter code)
 
----
-
-## Why
-
-Most scrapers fall over on three things:
-
-1. **Rate-limit blast damage** — naive concurrency triggers WAF blocks (CloudFront 403s, captchas) and you lose 30–80 % of pages.
-2. **Brittle URL handling** — SPAs redirect mid-extraction and you save the redirect target as the canonical URL (e.g. `/account/applications/` instead of the actual posting).
-3. **Shallow extraction** — JSON-LD title + description, but salary / recruiter / sections / apply-URL all empty.
-
-HarvestKit fixes all three: per-host token bucket throttle, multi-source canonical-URL resolution with junk-path filtering, and a section parser that walks JD HTML in EN/DE/FR/IT.
+A Chrome MV3 extension piggybacks on the real browser session to bypass DataDome / Cloudflare / PerimeterX bot walls (Yelp, LinkedIn) that defeat headless scraping.
 
 ---
 
-## Features
+## Quick Start (5 minutes)
 
-| Capability | Detail |
-| --- | --- |
-| **Shared 60-field schema** | CLI + extension write identical CSV columns |
-| **10 ATS adapters** | Greenhouse, Lever, Ashby, Workday, Personio, Recruitee, Workable, SmartRecruiters, Arbeitsagentur, jobs.ch |
-| **Deep-scrape pipeline** | Visit each posting, merge JSON-LD + microdata + OpenGraph + heuristics + recruiter |
-| **JD section parser** | Responsibilities / requirements / benefits in EN, DE, FR, IT |
-| **Recruiter mining** | Name (Frau/Herr/Mr/Mrs forms), title, phone (`+41 …`), email, LinkedIn |
-| **Per-host throttle** | Token bucket — separate from global pacing — prevents WAF blocks |
-| **WAF detection** | Identifies CloudFront 403s + captcha pages, backs off, never poisons cache |
-| **SQLite HTTP cache** | Gzip-compressed, TTL-bounded, auto-purges block pages |
-| **UA rotation** | Realistic Chrome / Firefox / Safari pool |
-| **Playwright fallback** | Cookie banner dismissal + content expansion + JobPosting wait |
-| **Browser extension** | MV3 side panel, IndexedDB persistence, retry-failed UI |
-| **General mode** | Businesses / restaurants / clinics — same engine, `LocalBusiness` schema |
-| **Exports** | CSV, JSON, NDJSON; Google Sheets / Notion / Slack hooks |
+### 1. Install Python 3.10+
 
----
+- **Windows**: [python.org installer](https://www.python.org/downloads/) — tick "Add to PATH"
+- **macOS**: `brew install python@3.11`
+- **Linux**: `sudo apt install python3.11 python3.11-venv`
 
-## Repo layout
-
-```text
-src/job_scraper/         Python job scraper engine + adapters
-src/general_scraper/     Python general scraper (Yelp-style directories)
-extension/               Chrome MV3 extension (TypeScript + React)
-  app/src/content/       Content-script extractors + site adapters
-  app/src/background/    Service worker + bulk crawl orchestrator
-  app/src/sidepanel/     React UI (dashboard / library / runs / settings)
-config.example.yaml      Default job-mode config
-config.general.example.yaml  General-mode config (Yelp template)
-config.jobsch.yaml       jobs.ch full-coverage config
-run.py                   Entry — dispatches jobs/general by mode
-```
-
----
-
-## Local CLI — install
+### 2. Clone + install
 
 ```bash
 git clone https://github.com/BluOryn/HarvestKit.git
 cd HarvestKit
+python -m venv .venv
 ```
 
-### Windows (PowerShell)
-
+**Windows (PowerShell):**
 ```powershell
-python -m venv .venv
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python -m playwright install chromium     # optional — only if use_playwright: true
 ```
 
-### macOS / Linux
-
+**macOS / Linux:**
 ```bash
-python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-python -m playwright install chromium     # optional
 ```
 
----
-
-## Local CLI — run
-
-### Job scraper
+### 3. (Optional) Enable LLM-fallback for any unknown site
 
 ```bash
-# Default config.yaml
-python run.py --confirm-permission
+# Get a key at https://console.anthropic.com/
+# Then set as env var:
 
-# Custom config (e.g. jobs.ch full coverage — ~25 min for 1900+ jobs)
-python run.py --config config.jobsch.yaml
+# Windows (PowerShell)
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
 
-# Ad-hoc URLs (adapter auto-detected by hostname)
-python run.py \
-  --urls https://boards.greenhouse.io/example https://careers.example.com \
-  --keywords "engineer,python" \
-  --confirm-permission
+# macOS / Linux
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
+
+Or paste into config:
+```yaml
+run:
+  llm_fallback_enabled: true
+  llm_api_key: "sk-ant-..."          # or leave blank → reads from env
+  llm_monthly_budget_usd: 5.0        # hard cap; LLM auto-disables when exceeded
+```
+
+> Cost: ~$0.001 per **new** host. Once HarvestKit learns selectors for a host, they're cached in `.cache/llm_selectors.sqlite` and reused free forever.
+
+### 4. (Optional) Playwright for JS-heavy SPA sites
+
+```bash
+python -m playwright install chromium
+```
+
+Then in config:
+```yaml
+run:
+  use_playwright: true
+```
+
+### 5. Run
+
+```bash
+# Scrape using a config file
+python run.py --config config.example.yaml
+
+# Scrape ad-hoc URLs (adapter auto-detected by hostname)
+python run.py --urls https://boards.greenhouse.io/example https://anyrandomsite.com/jobs
 
 # Skip deep-scrape (faster, fewer fields)
-python run.py --config config.yaml --no-deep-scrape
+python run.py --config config.example.yaml --no-deep-scrape
 
-# Disable HTTP cache (force fresh fetch)
-python run.py --config config.yaml --no-cache
-
-# Verbose logging
-python run.py --config config.yaml --log-level DEBUG
+# Force fresh fetch (ignore cache)
+python run.py --config config.example.yaml --no-cache
 ```
 
-### General scraper (businesses, places)
-
-```bash
-# Auto-detects mode: general from config
-python run.py --config config.general.example.yaml --confirm-permission
-
-# Force general mode regardless of mode field
-python run.py --general --config config.general.example.yaml --confirm-permission
-```
+Output → `output/jobs.csv` (or whatever `exports.csv.path` says).
 
 ---
 
-## Config knobs
+## Will it work on my site?
+
+| Site type | Works? | What you need to do |
+| --- | --- | --- |
+| Greenhouse / Lever / Ashby / Workday / Workable / SmartRecruiters / Personio / Recruitee / Arbeitsagentur / jobs.ch / finn.no / NAV / karrierestart | Yes, out-of-box | Just add URL to `targets:` in config |
+| Any site with **Schema.org JSON-LD** | Yes, out-of-box | Add URL — works automatically |
+| Static HTML w/ semantic labels (dt/dd, label-value pairs) | Yes, out-of-box | Add URL — universal extractor handles it |
+| **Brand-new site, no API, no schema** | Yes, with LLM-fallback | Enable `llm_fallback_enabled: true` — Haiku learns selectors on first hit, caches forever |
+| JS-only SPA (no server-side HTML) | Yes, with Playwright | `use_playwright: true` + `python -m playwright install chromium` |
+| DataDome / Cloudflare / PerimeterX bot walls (Yelp, LinkedIn) | **No headless** | Use Chrome extension — runs in your real browser session |
+| Auth-walled content (login required) | No | Out of scope — log in via extension, then click scrape |
+
+---
+
+## What you don't have to do
+
+- ❌ Write adapter code for new sites — LLM-fallback handles it
+- ❌ Hand-craft CSS selectors — auto-learned and cached
+- ❌ Configure 60 fields per site — schema is shared
+- ❌ Handle pagination — universal anchor-cluster detector finds next-page links
+- ❌ Worry about rate-limits — per-host token bucket throttles automatically
+- ❌ Manage WAF retries — auto-backoff on 403/captcha
+
+---
+
+## Config — full reference
 
 ```yaml
 run:
+  # ---- Identity ----
   user_agent: "HarvestKitBot/1.0 (+contact@example.com)"
-  delay_seconds: 1.0           # global pacing between requests
-  obey_robots: true            # respect robots.txt
-  confirm_permission: true     # required to run
-  use_playwright: false        # fallback to Chromium for JS-heavy sites
+  rotate_user_agents: true       # rotate Chrome/Firefox/Safari pool
+  obey_robots: false              # respect robots.txt; set true if required
+  confirm_permission: true        # required to run — acknowledge you have permission
 
-  deep_scrape: true            # visit each posting for richer fields
-  deep_concurrency: 4          # global parallelism
-  deep_per_host_concurrency: 2 # max in-flight requests per host
-  deep_per_host_delay_seconds: 1.0
+  # ---- Pacing ----
+  delay_seconds: 0.3              # min spacing between requests
+  max_pages: 10                   # listing pages to walk per target
+
+  # ---- Deep-scrape (visit each posting) ----
+  deep_scrape: true
+  deep_concurrency: 6             # global parallel workers
+  deep_per_host_concurrency: 2    # max concurrent requests per host
+  deep_per_host_delay_seconds: 0.5
   deep_max_retries: 2
 
+  # ---- Cache ----
   cache_enabled: true
   cache_ttl_seconds: 86400
   cache_path: ".cache/http_cache.sqlite"
-  rotate_user_agents: true     # rotate realistic Chrome/Firefox/Safari UAs
+
+  # ---- Proxies (optional, for high volume) ----
+  proxies:
+    - "http://user:pass@host:port"
+    - "socks5://host:port"
+  proxy_rotation: round_robin     # or "random"
+  proxy_max_failures: 3
+  proxy_cooldown_seconds: 300
+
+  # ---- Playwright fallback (JS-heavy sites) ----
+  use_playwright: false
+
+  # ---- LLM auto-adapter (Anthropic Haiku) ----
+  llm_fallback_enabled: false     # set true to enable
+  llm_api_key: ""                  # or read from $ANTHROPIC_API_KEY
+  llm_model: "claude-haiku-4-5-20251001"
+  llm_min_fields: 5                # trigger LLM when heuristics fill < N fields
+  llm_max_html_chars: 60000        # truncate HTML before sending
+  llm_cache_path: ".cache/llm_selectors.sqlite"
+  llm_monthly_budget_usd: 5.0      # hard cap
 
 keywords:
   include: ["engineer", "developer"]
   exclude: ["sales", "marketing"]
-  sectors: ["software", "ai", "cloud"]
 
 locations:
   include: ["Berlin", "Munich", "Remote"]
   allow_remote: true
 
 targets:
-  - name: example-greenhouse
-    url: "https://boards.greenhouse.io/example"
-    adapter: greenhouse        # auto | greenhouse | lever | ashby | jobs.ch | ...
+  - name: my-site
+    url: "https://example.com/jobs"
+    adapter: auto                  # auto | greenhouse | lever | generic | ...
 
 exports:
   csv:
     enabled: true
     path: "output/jobs.csv"
+  gsheets:
+    enabled: false
+    service_account_json: "creds.json"
+    spreadsheet_id: ""
+  notion:
+    enabled: false
+    token: ""
+    database_id: ""
+  slack:
+    enabled: false
+    webhook_url: ""
 ```
 
 ---
 
-## Extension — build
+## Chrome Extension — install + use
+
+### Build (one-time)
 
 ```bash
 cd extension
@@ -179,41 +216,29 @@ node build.mjs                 # one-shot build → extension/dist/
 node build.mjs --watch         # rebuild on file change
 ```
 
-Outputs:
-
-```text
-extension/dist/content.js      66 kB   — content script (per-page extractor)
-extension/dist/background.js  273 kB   — service worker (bulk crawl orchestrator)
-extension/dist/sidepanel.js   584 kB   — React side-panel UI
-extension/dist/sidepanel.html
-extension/dist/sidepanel.css
-```
-
-## Extension — install (load unpacked)
+### Install (load unpacked)
 
 1. Open `chrome://extensions/` (or `edge://extensions/`)
 2. Toggle **Developer mode** (top-right)
 3. Click **Load unpacked**
-4. Select the `extension/` directory (the one containing `manifest.json`, **not** `dist/`)
-5. Pin the toolbar icon — clicking it opens the side panel
+4. Select the `extension/` directory (the one containing `manifest.json`)
+5. Pin toolbar icon — clicking opens side panel
 
-## Extension — usage
+### Use
 
-### Job mode (default)
-
-1. Open any job listing site (jobs.ch, LinkedIn, Indeed, Greenhouse boards, …)
+**Job mode (default):**
+1. Open any job site (Yelp, LinkedIn, finn.no, jobs.ch, indeed, …)
 2. Click toolbar icon → side panel opens
-3. Click **🔥 Scrape Everything** — auto-paginates → snapshots cards → deep-scrapes each posting
-4. Or use individual buttons: *Scrape this page* / *Snapshot list* / *Deep-scrape list*
-5. View saved jobs in **Library** → export as CSV / JSON / NDJSON
-6. **Runs** tab shows progress and lets you retry failed URLs
+3. Click **🔥 Scrape Everything** — auto-paginates → snapshots cards → deep-scrapes each
+4. View results in **Library** → export CSV / JSON / NDJSON
+5. **Runs** tab shows progress + retry failures
 
-### General mode (businesses, places)
-
-1. Toggle **General** in the top-right of the side panel
-2. Open a Yelp / Google Maps / business-directory page
+**General mode (businesses, places):**
+1. Toggle **General** in side panel
+2. Open Yelp / Google Maps / Tripadvisor / Yellowpages page
 3. Click **🔥 Scrape ALL listings**
-4. Records appear in **Library** with category / address / rating / phone / website / hours
+
+The extension runs in your real browser, so it bypasses DataDome / Cloudflare / PerimeterX. Headless CLI cannot do this.
 
 ---
 
@@ -231,10 +256,12 @@ work_authorization, visa_sponsorship, relocation, travel_required,
 recruiter_name, recruiter_title, recruiter_email, recruiter_phone, recruiter_linkedin,
 hiring_manager, hiring_manager_email, application_email, application_phone,
 apply_url, job_url, external_id, requisition_id,
-source_ats, source_domain, raw_jsonld, confidence, scraped_at
+source_ats, source_domain, raw_jsonld, confidence, scraped_at, extras_json
 ```
 
-General-mode schema (separate, 32 fields): `name, category, subcategories, description, address, street_address, city, region, country, postal_code, latitude, longitude, phone, email, website, social_links, rating, review_count, price_range, hours, image, tags, amenities, menu_url, reservation_url, is_claimed, external_id, source_url, source_listing_url, source_domain, raw_jsonld, scraped_at`.
+`extras_json` catches anything outside the 60 fields — site-specific labels stash here automatically (e.g. `nav_arbeidstid`, `karrierestart_tiltredelse`).
+
+General-mode schema (32 fields): `name, category, subcategories, description, address, street_address, city, region, country, postal_code, latitude, longitude, phone, email, website, social_links, rating, review_count, price_range, hours, image, tags, amenities, menu_url, reservation_url, is_claimed, external_id, source_url, source_listing_url, source_domain, raw_jsonld, scraped_at`.
 
 ---
 
@@ -242,29 +269,22 @@ General-mode schema (separate, 32 fields): `name, category, subcategories, descr
 
 | Adapter | Hosts | Type |
 | --- | --- | --- |
-| `greenhouse` | `boards.greenhouse.io`, `boards-api.greenhouse.io` | Public JSON API |
-| `lever` | `jobs.lever.co`, `jobs.eu.lever.co` | Public JSON API |
+| `greenhouse` | `boards.greenhouse.io` | Public JSON API |
+| `lever` | `jobs.lever.co` | Public JSON API |
 | `ashby` | `jobs.ashbyhq.com` | Public JSON API |
 | `workday` | `*.wdN.myworkdayjobs.com` | CXS API |
-| `personio` | `*.jobs.personio.de`, `*.jobs.personio.com` | XML feed |
+| `personio` | `*.jobs.personio.de/com` | XML feed |
 | `recruitee` | `*.recruitee.com` | Public JSON API |
-| `workable` | `*.workable.com`, `apply.workable.com` | Widget + v3 API |
+| `workable` | `*.workable.com` | Widget + v3 API |
 | `smartrecruiters` | `smartrecruiters.com` | Public JSON API |
 | `arbeitsagentur` | `arbeitsagentur.de` | Bundesagentur REST API |
-| `jobs.ch` | `www.jobs.ch` | Public JSON search API |
-| `generic` | anything else | Sitemap + BFS crawl + JSON-LD extraction |
+| `jobs.ch` | `jobs.ch` | Public JSON search API |
+| `finn.no` | `finn.no/job/` | SSR HTML harvest |
+| `nav.no` | `arbeidsplassen.nav.no` | SSR HTML harvest |
+| `karrierestart.no` | `karrierestart.no` | SSR HTML harvest |
+| `generic` | **anything else** | Sitemap + BFS crawl + JSON-LD + universal extractor + LLM-fallback |
 
----
-
-## Compliance
-
-- Designed for sites you have permission to scrape.
-- Respects `robots.txt` by default (`obey_robots: true`).
-- Confirm permission via `confirm_permission: true` in config or `--confirm-permission` CLI flag.
-- WAF / 403 / captcha detection backs off on block rather than hammering.
-- Per-host throttle prevents accidental DoS.
-
-Don't use this against sites that prohibit scraping. Don't bypass paywalls or login walls. Don't run it for spam or harassment.
+For unknown sites, the `generic` adapter clusters anchors by URL pattern (e.g. `/job/`, `/biz/`, `/listing/`, `/ad/`), follows each, and runs the full extraction stack including LLM-fallback if enabled.
 
 ---
 
@@ -272,26 +292,57 @@ Don't use this against sites that prohibit scraping. Don't bypass paywalls or lo
 
 | Symptom | Fix |
 | --- | --- |
-| Many 403 / WAF blocks | `deep_per_host_concurrency: 1`, `deep_per_host_delay_seconds: 2.0` |
-| Empty descriptions | `use_playwright: true` for SPA sites |
-| jobs.ch returns 0 jobs | Uses public JSON API directly — should work without Playwright |
-| Cache poisoned with errors | Auto-purged when WAF detector trips; manual purge: `rm -r .cache/` |
-| Extension shows wrong apply_url | Canonical URL filter rejects `/account/`, `/applications/`, `/recommendations/` |
+| Many 403 / WAF blocks | Lower `deep_per_host_concurrency: 1`, raise `deep_per_host_delay_seconds: 2.0` |
+| Empty descriptions on SPA | Set `use_playwright: true` + `python -m playwright install chromium` |
+| New site returns 0 fields | Enable `llm_fallback_enabled: true` + set `ANTHROPIC_API_KEY` |
+| LLM cache stale (site changed layout) | Delete `.cache/llm_selectors.sqlite` — will re-learn next run |
+| LLM budget exhausted | Raise `llm_monthly_budget_usd` or wait until next month (resets) |
+| Cache poisoned with errors | `rm -r .cache/` — auto-rebuilds |
+| Cloudflare / DataDome blocks (Yelp, LinkedIn) | Use extension instead of CLI — runs in real browser |
 | `playwright not installed` | `python -m playwright install chromium` |
+| Extension shows wrong apply_url | Canonical URL filter rejects `/account/`, `/applications/`, `/recommendations/` |
+
+---
+
+## Compliance
+
+- Designed for sites you have permission to scrape.
+- Default `obey_robots: true` respects `robots.txt`.
+- `confirm_permission: true` (config) or `--confirm-permission` (CLI) required to run.
+- WAF / 403 / captcha detection auto-backs off — never hammers.
+- Per-host throttle prevents accidental DoS.
+
+Don't use against sites that prohibit scraping. Don't bypass paywalls / login walls. Don't run for spam / harassment.
+
+---
+
+## Repo layout
+
+```text
+src/job_scraper/         Python engine (adapters, extract, universal, deep_scrape, llm_adapter)
+src/general_scraper/     General-mode (businesses, places)
+extension/               Chrome MV3 extension (TypeScript + React)
+  app/src/content/       Per-page extractor + site adapters
+  app/src/background/    Service worker + bulk crawl orchestrator
+  app/src/sidepanel/     React UI (dashboard, library, runs, settings)
+config.example.yaml      Default job-mode config
+config.general.example.yaml  General-mode (Yelp template)
+config.norway-big.yaml   Norway IT — 87 targets fan-out
+run.py                   Entry — dispatches jobs/general by mode
+```
 
 ---
 
 ## Development
 
 ```bash
-# Python tests / lint
+# Python
 pip install -r requirements.txt
-python -m pytest                 # if tests exist
-python -m ruff check src/         # if ruff configured
+python -m pytest
 
-# Extension watch + reload loop
+# Extension watch + reload
 cd extension && node build.mjs --watch
-# After each rebuild, click reload icon on chrome://extensions/
+# Then click reload icon on chrome://extensions/ after each rebuild
 ```
 
 ---

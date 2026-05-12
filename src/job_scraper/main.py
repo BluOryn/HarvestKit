@@ -58,6 +58,13 @@ def main() -> None:
         per_host_concurrency=config.run.deep_per_host_concurrency,
         per_host_delay_seconds=config.run.deep_per_host_delay_seconds,
         max_retries=config.run.deep_max_retries,
+        llm_fallback_enabled=config.run.llm_fallback_enabled,
+        llm_api_key=config.run.llm_api_key,
+        llm_model=config.run.llm_model,
+        llm_min_fields=config.run.llm_min_fields,
+        llm_max_html_chars=config.run.llm_max_html_chars,
+        llm_cache_path=config.run.llm_cache_path,
+        llm_monthly_budget_usd=config.run.llm_monthly_budget_usd,
     )
 
     all_jobs = []

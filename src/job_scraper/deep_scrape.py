@@ -58,6 +58,14 @@ class DeepScrapeConfig:
     use_playwright_fallback: bool = False
     playwright_after_failures: int = 1  # retry with playwright after N normal failures
     progress_every: int = 25
+    # LLM-fallback (Anthropic Haiku) — auto-learn selectors for unknown hosts
+    llm_fallback_enabled: bool = False
+    llm_api_key: str = ""
+    llm_model: str = "claude-haiku-4-5-20251001"
+    llm_min_fields: int = 5
+    llm_max_html_chars: int = 60000
+    llm_cache_path: str = ".cache/llm_selectors.sqlite"
+    llm_monthly_budget_usd: float = 5.0
 
 
 class _HostThrottle:
@@ -159,6 +167,21 @@ def deep_scrape_jobs(
                     uni = universal_extract(html, final_url, country_hint=hint)
                     if uni and (uni.title or uni.description):
                         listing.merge(uni)
+                        # Third pass: LLM-fallback for fields heuristics missed
+                        if cfg.llm_fallback_enabled:
+                            try:
+                                from .llm_adapter import llm_enrich
+                                llm_enrich(
+                                    html, final_url, listing,
+                                    api_key=cfg.llm_api_key,
+                                    model=cfg.llm_model,
+                                    min_fields=cfg.llm_min_fields,
+                                    max_html_chars=cfg.llm_max_html_chars,
+                                    cache_path=cfg.llm_cache_path,
+                                    monthly_budget_usd=cfg.llm_monthly_budget_usd,
+                                )
+                            except Exception as exc:
+                                logging.debug("llm_enrich failed for %s: %s", final_url, exc)
                         return True, "ok-universal"
                     last_err = "no-content"
                 else:
