@@ -713,13 +713,13 @@ TECH_DICT = [
 SENIORITY = [
     ("principal", re.compile(r"\bprincipal\b", re.I)),
     ("staff", re.compile(r"\bstaff\b", re.I)),
-    ("senior", re.compile(r"\bsenior\b|\bsr\.?\b", re.I)),
-    ("lead", re.compile(r"\blead\b|\btech\s+lead\b", re.I)),
+    ("senior", re.compile(r"\bsenior(?:r[åa]dgiver|utvikler|konsulent|ingeni[øo]r|arkitekt)?\b|\bsr\.?\b|seniorrådgiver|seniorutvikler", re.I)),
+    ("lead", re.compile(r"\blead\b|\btech\s+lead\b|\bteam\s+lead\b|\bteamleder\b|\bleder\b", re.I)),
     ("mid", re.compile(r"\bmid[-\s]?level\b", re.I)),
-    ("junior", re.compile(r"\bjunior\b|\bjr\.?\b|\bgraduate\b|\bentry[-\s]?level\b", re.I)),
-    ("intern", re.compile(r"\bintern\b|\bpraktikum\b|\bwerkstudent\b", re.I)),
-    ("director", re.compile(r"\bdirector\b", re.I)),
-    ("head", re.compile(r"\bhead\s+of\b|\bvp\b|\bcto\b", re.I)),
+    ("junior", re.compile(r"\bjunior\b|\bjr\.?\b|\bgraduate\b|\bentry[-\s]?level\b|nyutdannet|trainee", re.I)),
+    ("intern", re.compile(r"\bintern\b|\bpraktikum\b|\bwerkstudent\b|\bpraktikant\b", re.I)),
+    ("director", re.compile(r"\bdirector\b|\bdirekt[øo]r\b", re.I)),
+    ("head", re.compile(r"\bhead\s+of\b|\bvp\b|\bcto\b|\bsjef\b", re.I)),
 ]
 
 # Salary regex — covers EUR/USD/GBP/CHF/SEK/DKK/NOK/PLN/CZK/HUF in CH-formatted numbers
