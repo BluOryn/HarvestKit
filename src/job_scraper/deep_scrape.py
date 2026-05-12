@@ -28,6 +28,25 @@ from urllib.parse import urlparse
 from .extract import extract_job_from_page
 from .http import HttpClient
 from .models import JobListing
+from .universal import universal_extract, mine_contacts
+
+
+def _country_hint(url: str) -> Optional[str]:
+    """Best-effort country guess from URL/TLD. Drives phone-regex selection."""
+    host = urlparse(url).netloc.lower()
+    if host.endswith(".no") or "nav.no" in host:
+        return "NO"
+    if host.endswith(".de") or "arbeitsagentur" in host:
+        return "DE"
+    if host.endswith(".ch") or "jobs.ch" in host:
+        return "CH"
+    if host.endswith(".se"):
+        return "SE"
+    if host.endswith(".dk"):
+        return "DK"
+    if host.endswith(".fi"):
+        return "FI"
+    return None
 
 
 @dataclass
@@ -116,10 +135,31 @@ def deep_scrape_jobs(
             if fetched is not None:
                 final_url, html = fetched
                 if html and len(html) > 200:
+                    # First pass: JSON-LD / microdata extractor
                     extracted = extract_job_from_page(html, final_url)
                     if extracted and (extracted.title or extracted.description):
                         listing.merge(extracted)
+                        # Even with JSON-LD, run the contact miner on the raw
+                        # HTML to fill recruiter_email/phone fields that may
+                        # only exist outside the JSON-LD blob.
+                        hint = _country_hint(final_url)
+                        contacts = mine_contacts(html, country_hint=hint)
+                        for k, v in contacts.items():
+                            if k == "contact_section_text":
+                                listing.set_extra("contact_section", v)
+                                continue
+                            # mine_contacts is more accurate than the JSON-LD path
+                            # for recruiter_name (uses Norwegian "Stillingstittel"
+                            # separator) — always prefer its value when non-empty.
+                            if v:
+                                setattr(listing, k, v)
                         return True, "ok"
+                    # Second pass: universal smart-DOM extractor (no Schema.org needed)
+                    hint = _country_hint(final_url)
+                    uni = universal_extract(html, final_url, country_hint=hint)
+                    if uni and (uni.title or uni.description):
+                        listing.merge(uni)
+                        return True, "ok-universal"
                     last_err = "no-content"
                 else:
                     last_err = "empty-body"

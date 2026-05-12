@@ -106,6 +106,14 @@ def _flatten_json_ld(data: Any) -> Iterable[Any]:
             yield from _flatten_json_ld(item)
         return
     if isinstance(data, dict):
+        # Some sites (e.g. finn.no) wrap the actual ld+json under a quirky key:
+        #     {"script:ld+json": {"@type": "JobPosting", ...}}
+        # Unwrap any single-key wrapper whose value looks like a Schema.org object.
+        if len(data) == 1:
+            only_val = next(iter(data.values()))
+            if isinstance(only_val, dict) and ("@type" in only_val or "@context" in only_val or "@graph" in only_val):
+                yield from _flatten_json_ld(only_val)
+                return
         graph = data.get("@graph")
         if graph:
             yield from _flatten_json_ld(graph)
@@ -731,7 +739,26 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
             j.recruiter_email = recruiter
         if not j.application_email:
             j.application_email = recruiter or emails[0]
-    phones = _uniq([p for p in PHONE_RX.findall(text) if len(re.sub(r"\D", "", p)) >= 7])
+    # Filter:
+    #  - require at least 8 digits
+    #  - reject 9-12 raw digit blobs with no separators (likely IDs, e.g. finnkode)
+    # Reject:
+    #  - <8 or >15 digits
+    #  - 9-12 raw digits with no separator (likely an ID, e.g. finnkode 462751961)
+    #  - date-like strings (DD.MM.YYYY / DD/MM/YYYY / YYYY-MM-DD)
+    DATE_LIKE_RX = re.compile(r"^\d{1,4}[\./\-]\d{1,4}[\./\-]\d{2,4}$")
+    phones_filt: List[str] = []
+    for p in PHONE_RX.findall(text):
+        p_stripped = p.strip()
+        digits = re.sub(r"\D", "", p_stripped)
+        if not (8 <= len(digits) <= 15):
+            continue
+        if re.fullmatch(r"\d{9,12}", p_stripped):
+            continue
+        if DATE_LIKE_RX.match(p_stripped):
+            continue
+        phones_filt.append(p_stripped)
+    phones = _uniq(phones_filt)
     if phones and not j.application_phone:
         j.application_phone = phones[0]
 

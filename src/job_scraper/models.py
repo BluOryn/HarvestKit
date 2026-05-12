@@ -32,9 +32,9 @@ JOB_FIELDS: List[str] = [
 ]
 
 # Local-only book-keeping fields appended after the schema fields (parity with extension).
-EXTRA_FIELDS: List[str] = ["id", "source", "keywords_matched", "saved_at"]
+EXTRA_FIELDS: List[str] = ["id", "source", "keywords_matched", "saved_at", "extras_json"]
 
-CSV_COLUMNS: List[str] = ["id"] + JOB_FIELDS + ["source", "keywords_matched", "saved_at"]
+CSV_COLUMNS: List[str] = ["id"] + JOB_FIELDS + ["source", "keywords_matched", "saved_at", "extras_json"]
 
 
 @dataclass
@@ -100,6 +100,11 @@ class JobListing:
     source: str = ""                 # config target.name (CLI only)
     keywords_matched: List[str] = field(default_factory=list)
     saved_at: str = ""               # local persistence stamp
+    # Dynamic catch-all for site-specific fields not in the 60-field schema.
+    # Examples: finnkode, nav_uuid, jobbnorge_position_id, deadline_text,
+    # work_languages, contact_persons (list), nav_categories, etc.
+    # Serialized as JSON in CSV via the `extras_json` virtual column.
+    extras: Dict[str, object] = field(default_factory=dict)
 
     @property
     def remote(self) -> str:
@@ -132,6 +137,7 @@ class JobListing:
         return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
 
     def to_dict(self) -> Dict[str, str]:
+        import json as _json
         out: Dict[str, str] = {"id": self.fingerprint()}
         for f in JOB_FIELDS:
             v = getattr(self, f, "")
@@ -139,7 +145,18 @@ class JobListing:
         out["source"] = self.source
         out["keywords_matched"] = ", ".join(self.keywords_matched) if isinstance(self.keywords_matched, list) else str(self.keywords_matched)
         out["saved_at"] = self.saved_at
+        # Serialize extras as compact JSON (preserves nested structures + future-proofs CSV).
+        try:
+            out["extras_json"] = _json.dumps(self.extras, ensure_ascii=False) if self.extras else ""
+        except Exception:
+            out["extras_json"] = ""
         return out
+
+    def set_extra(self, key: str, value: object) -> None:
+        """Stash a site-specific value that doesn't fit the 60-field schema."""
+        if value is None or value == "":
+            return
+        self.extras[key] = value
 
     def to_row(self) -> List[str]:
         d = self.to_dict()
@@ -160,3 +177,6 @@ class JobListing:
             self.source = other.source
         if other.keywords_matched and not self.keywords_matched:
             self.keywords_matched = list(other.keywords_matched)
+        # Merge extras — new value wins for same key
+        if other.extras:
+            self.extras.update({k: v for k, v in other.extras.items() if v not in (None, "")})

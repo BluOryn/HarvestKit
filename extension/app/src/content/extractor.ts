@@ -79,6 +79,31 @@ function bestApplyUrl(jsonLdApply: string, jobUrl: string): string {
   return jobUrl;
 }
 
+/** Norwegian-specific contact mining. finn.no, NAV, jobbnorge all use Norwegian
+ *  labels like "Kontaktperson: <Name> Stillingstittel: <Role>". */
+function mineNorwegianContacts(text: string): {
+  recruiter_name?: string;
+  recruiter_title?: string;
+  recruiter_phone?: string;
+  recruiter_email?: string;
+} {
+  const out: any = {};
+  const stmatch = text.match(/Kontaktperson\s*:?\s*([^:]{3,60}?)\s+Stillingstittel/i);
+  if (stmatch) {
+    const cand = stmatch[1].trim();
+    if (cand.split(/\s+/).length >= 2 && !/^(Send|Mobil|Telefon|Epost)\b/i.test(cand)) {
+      out.recruiter_name = cand;
+      const after = text.slice(stmatch.index! + stmatch[0].length);
+      const tmatch = after.match(/Stillingstittel\s*:?\s*([^:]{3,80}?)(?:\s+Mobil|\s+Telefon|\s+E[-\s]?post|\s+Send|$)/i);
+      if (tmatch) out.recruiter_title = tmatch[1].trim();
+    }
+  }
+  // NO phone — strict (8 digits with spaces / +47)
+  const phoneMatch = text.match(/(?:\+47[\s]?)?\d{2}\s\d{2}\s\d{2}\s\d{2}/);
+  if (phoneMatch) out.recruiter_phone = phoneMatch[0].replace(/\s/g, "");
+  return out;
+}
+
 export function extract(): { job: Job | null; detection: ReturnType<typeof detectJobPage> } {
   const det = detectJobPage();
   if (!det.isJob) return { job: null, detection: det };
@@ -92,6 +117,13 @@ export function extract(): { job: Job | null; detection: ReturnType<typeof detec
 
   const job = mergeJobs([emptyJob(), ...parts.filter(Boolean)]);
   job.source_domain = location.hostname;
+
+  // Norwegian contact mining (always run — works for finn.no / NAV / jobbnorge)
+  const bodyText = (document.body?.innerText || document.body?.textContent || "").slice(0, 30000);
+  const norwegian = mineNorwegianContacts(bodyText);
+  if (norwegian.recruiter_name) job.recruiter_name = norwegian.recruiter_name;
+  if (norwegian.recruiter_title) job.recruiter_title = norwegian.recruiter_title;
+  if (norwegian.recruiter_phone && !job.recruiter_phone) job.recruiter_phone = norwegian.recruiter_phone;
 
   // Canonical URL: never trust a junk redirect target.
   const ldUrl = (parts.find((p) => p && p.job_url)?.job_url) || "";

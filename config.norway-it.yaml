@@ -1,0 +1,126 @@
+# Norway tech / IT jobs — past 30 days
+# Targets: finn.no (largest marketplace) + arbeidsplassen.nav.no (gov feed).
+# Each adapter paginates internally; keep max_pages high to capture full result set.
+
+run:
+  user_agent: "HarvestKitBot/1.0 (+contact@example.com)"
+  delay_seconds: 0.3
+  max_pages: 80
+  obey_robots: false
+  confirm_permission: true
+  use_playwright: false
+  deep_scrape: true
+  deep_concurrency: 8
+  deep_per_host_concurrency: 4
+  deep_per_host_delay_seconds: 0.5
+  deep_max_retries: 3
+  cache_enabled: true
+  rotate_user_agents: true
+
+keywords:
+  # Filter on the merged title+description+tech_stack of each posting.
+  include:
+    - developer
+    - engineer
+    - software
+    - programmer
+    - utvikler
+    - utvikling
+    - programmerer
+    - systemutvikler
+    - frontend
+    - backend
+    - fullstack
+    - full-stack
+    - devops
+    - "site reliability"
+    - sre
+    - cloud
+    - data engineer
+    - data scientist
+    - data analyst
+    - machine learning
+    - ml engineer
+    - ai engineer
+    - artificial intelligence
+    - cybersecurity
+    - sikkerhet
+    - security
+    - architect
+    - arkitekt
+    - mobil
+    - android
+    - ios
+    - swift
+    - kotlin
+    - python
+    - java
+    - typescript
+    - javascript
+    - react
+    - node
+    - golang
+    - rust
+    - "c\\+\\+"
+    - "c#"
+    - .net
+    - php
+    - ruby
+    - scala
+    - kubernetes
+    - docker
+    - aws
+    - azure
+    - gcp
+    - terraform
+    - sql
+    - postgres
+    - mongodb
+    - elasticsearch
+    - kafka
+    - api
+    - rest
+    - graphql
+    - qa
+    - tester
+    - testautomatisering
+    - test-automation
+    - sdet
+    - scrum
+    - agile
+    - product manager
+    - produkteier
+    - product owner
+    - tech lead
+    - teknisk leder
+    - it-konsulent
+    - it consultant
+    - solution architect
+    - løsningsarkitekt
+    - dataanalytiker
+    - data engineer
+
+locations:
+  include: []
+  allow_remote: true
+
+targets:
+  # 1. finn.no — broad IT search, published in last 30 days.
+  - name: finn-it-30d
+    url: "https://www.finn.no/job/fulltime/search.html?q=utvikler+OR+developer+OR+engineer+OR+software+OR+devops+OR+data&published=30"
+    adapter: finn.no
+  # 2. arbeidsplassen.nav.no — government public feed
+  - name: nav-it-30d-utvikler
+    url: "https://arbeidsplassen.nav.no/stillinger?q=utvikler"
+    adapter: nav.no
+  - name: nav-it-30d-engineer
+    url: "https://arbeidsplassen.nav.no/stillinger?q=engineer"
+    adapter: nav.no
+  - name: nav-it-30d-developer
+    url: "https://arbeidsplassen.nav.no/stillinger?q=developer"
+    adapter: nav.no
+
+exports:
+  csv:
+    enabled: true
+    path: "output/norway_it_30d.csv"

@@ -1,0 +1,32 @@
+run:
+  user_agent: "HarvestKitBot/1.0 (+contact@example.com)"
+  delay_seconds: 0.3
+  max_pages: 1
+  obey_robots: false
+  confirm_permission: true
+  use_playwright: false
+  deep_scrape: true
+  deep_concurrency: 4
+  deep_per_host_concurrency: 2
+  deep_per_host_delay_seconds: 0.5
+  deep_max_retries: 2
+  cache_enabled: true
+  rotate_user_agents: true
+
+keywords:
+  include: []
+  exclude: []
+
+locations:
+  include: []
+  allow_remote: true
+
+targets:
+  - name: finn-smoketest
+    url: "https://www.finn.no/job/fulltime/search.html?q=developer&published=1"
+    adapter: finn.no
+
+exports:
+  csv:
+    enabled: true
+    path: "output/finn_smoketest.csv"

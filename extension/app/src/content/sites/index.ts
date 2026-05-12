@@ -184,6 +184,67 @@ export const SITES: SiteAdapter[] = [
     },
   },
   {
+    name: "finn.no",
+    hostMatch: /(^|\.)finn\.no$/i,
+    extract(root) {
+      const out: ListCard[] = [];
+      const seen = new Set<string>();
+      // finn.no uses simple /job/ad/<id> for detail URLs
+      const AD_RX = /\/job\/ad\/(\d+)/;
+      for (const a of Array.from(root.querySelectorAll("a[href*='/job/ad/']")) as HTMLAnchorElement[]) {
+        const href = a.getAttribute("href") || "";
+        const m = href.match(AD_RX);
+        if (!m) continue;
+        const id = m[1];
+        if (seen.has(id)) continue;
+        seen.add(id);
+        const url = `https://www.finn.no/job/ad/${id}`;
+        const card = (a.closest("article, li, div[class*='card'], div[class*='ad'], div[class*='listing']") || a) as Element;
+        const title = clean(card.querySelector("h2,h3,[class*='title'],[class*='Title']")?.textContent || a.textContent || "");
+        if (!title || title.length < 4) continue;
+        const company = clean(card.querySelector("[class*='company'], [class*='employer']")?.textContent || "");
+        const loc = clean(card.querySelector("[class*='location'], [class*='place'], [class*='workplace']")?.textContent || "");
+        out.push({ title, company, location: loc, url, snippet: clean(card.textContent || "").slice(0, 240) });
+      }
+      return uniqByUrl(out);
+    },
+    nextPage(root) {
+      const link = root.querySelector("link[rel='next']") as HTMLLinkElement | null;
+      if (link?.href) return link.href;
+      const a = root.querySelector("a[rel='next'], a[aria-label*='neste' i], a[aria-label*='next' i]") as HTMLAnchorElement | null;
+      return a?.href || null;
+    },
+  },
+  {
+    name: "nav.no",
+    hostMatch: /(^|\.)nav\.no$/i,
+    extract(root) {
+      const out: ListCard[] = [];
+      const seen = new Set<string>();
+      const UUID_RX = /\/stillinger\/stilling\/([a-f0-9\-]{20,})/i;
+      for (const a of Array.from(root.querySelectorAll("a[href*='/stillinger/stilling/']")) as HTMLAnchorElement[]) {
+        const href = a.getAttribute("href") || "";
+        const m = href.match(UUID_RX);
+        if (!m) continue;
+        const uuid = m[1];
+        if (seen.has(uuid)) continue;
+        seen.add(uuid);
+        const url = `https://arbeidsplassen.nav.no/stillinger/stilling/${uuid}`;
+        const card = (a.closest("article, li, div[class*='card'], div[class*='result'], div[class*='aksel']") || a) as Element;
+        const title = clean(card.querySelector("h2,h3,[class*='title'],[class*='Title']")?.textContent || a.textContent || "");
+        if (!title || title.length < 4) continue;
+        const company = clean(card.querySelector("[class*='employer'], [class*='company']")?.textContent || "");
+        const loc = clean(card.querySelector("[class*='location'], [class*='place']")?.textContent || "");
+        out.push({ title, company, location: loc, url, snippet: clean(card.textContent || "").slice(0, 240) });
+      }
+      return uniqByUrl(out);
+    },
+    nextPage(root) {
+      const a = root.querySelector("a[rel='next'], a[aria-label*='neste' i], a[aria-label*='next' i]") as HTMLAnchorElement | null;
+      return a?.href || null;
+    },
+  },
+  {
     name: "jobs.ch",
     hostMatch: /(^|\.)jobs\.ch$/i,
     extract(root) {
@@ -260,7 +321,7 @@ export function pickSiteAdapter(): SiteAdapter | null {
 }
 
 // Known aggregator domains — on these we relax title/URL filtering
-const AGGREGATOR_RX = /jobrapido|indeed|glassdoor|monster|simplyhired|ziprecruiter|linkedin.*\/jobs|naukri|reed\.co\.uk|seek\.com|stepstone|totaljobs|cwjobs|jobsite|jobs\.ch|jobup\.ch|jobscout24|kalaydo|stellenanzeigen|adecco|jobs\.de|xing\.com\/jobs|hh\.ru|wellfound|angel\.co|builtin|dice/i;
+const AGGREGATOR_RX = /jobrapido|indeed|glassdoor|monster|simplyhired|ziprecruiter|linkedin.*\/jobs|naukri|reed\.co\.uk|seek\.com|stepstone|totaljobs|cwjobs|jobsite|jobs\.ch|jobup\.ch|jobscout24|kalaydo|stellenanzeigen|adecco|jobs\.de|xing\.com\/jobs|hh\.ru|wellfound|angel\.co|builtin|dice|finn\.no|nav\.no|arbeidsplassen|jobbnorge|webcruiter|jobindex\.dk|jobnet\.dk|arbetsformedlingen|monster\.se|arbetspaket|hh\.ru|rabota\.ru/i;
 
 export function genericListExtract(root: Document = document): ListCard[] {
   const TITLE_RX = /(software|engineer|developer|data|ai|ml|cloud|devops|backend|frontend|fullstack|stack|architect|scientist|analyst|sre|platform|security|product|qa|sdet|mobile|android|ios|principal|staff|lead|director|head|consultant|specialist|manager|intern|trainee|designer|coordinator|associate|executive|officer|researcher|administrator|recruiter|hr|operations|delivery|solution)/i;

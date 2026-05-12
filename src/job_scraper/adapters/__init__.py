@@ -5,10 +5,12 @@ from urllib.parse import urlparse
 from .arbeitsagentur import ArbeitsagenturAdapter
 from .ashby import AshbyAdapter
 from .base import BaseAdapter
+from .finn import FinnNoAdapter
 from .generic import GenericAdapter
 from .greenhouse import GreenhouseAdapter
 from .jobsch import JobsChAdapter
 from .lever import LeverAdapter
+from .nav import NavNoAdapter
 from .personio import PersonioAdapter
 from .recruitee import RecruiteeAdapter
 from .smartrecruiters import SmartRecruitersAdapter
@@ -28,6 +30,8 @@ ADAPTERS: Dict[str, BaseAdapter] = {
     "workday": WorkdayAdapter(),
     "arbeitsagentur": ArbeitsagenturAdapter(),
     "jobs.ch": JobsChAdapter(),
+    "finn.no": FinnNoAdapter(),
+    "nav.no": NavNoAdapter(),
     "generic": GenericAdapter(),
 }
 
@@ -62,4 +66,8 @@ def _detect_adapter(url: str) -> str:
         return "arbeitsagentur"
     if host == "www.jobs.ch" or host == "jobs.ch" or host.endswith(".jobs.ch"):
         return "jobs.ch"
+    if host == "www.finn.no" or host == "finn.no" or host.endswith(".finn.no"):
+        return "finn.no"
+    if "arbeidsplassen.nav.no" in host or host == "arbeidsplassen.nav.no":
+        return "nav.no"
     return "generic"
