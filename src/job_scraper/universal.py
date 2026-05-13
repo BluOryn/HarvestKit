@@ -658,6 +658,7 @@ def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
         "Arbeidssted": "location",
         "Sted": "location",
         "Bransje": "company_industry",
+        "Bransjer": "company_industry",          # plural form on KS detail pages
         "Antall stillinger": "_skip",
         "Tiltredelse": "start_date",
         "Tiltreder": "start_date",
@@ -668,11 +669,15 @@ def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
         "Stillingsfunksjon": "department",
         "Sektor": "company_industry",
         "Yrke": "department",
+        "Yrker": "department",                    # plural form
+        "Fagområde": "department",
+        "Fagområder": "department",               # plural form
         "Heltid/Deltid": "employment_type",
         "Stillingsbrøk": "_employment_pct",
         "Arbeidsspråk": "language",
         "Hjemmekontor": "remote_type",
         "Reisemengde": "travel_required",
+        "Krav til førerkort": "_drivers_license",
     }
     for card in soup.select(".fact-card, .fact-grid > div"):
         title_el = card.select_one(".fact-card-title")
