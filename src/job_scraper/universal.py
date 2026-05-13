@@ -419,6 +419,8 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
         _nav_no_specific(soup, j)
     elif "karrierestart.no" in parsed.netloc:
         _karrierestart_specific(soup, j)
+    elif "jobbsafari.no" in parsed.netloc:
+        _jobbsafari_specific(soup, j, html)
 
     # Section parsing — delegate to extract.py's parser (already handles EN/DE/FR/IT/NO)
     from .extract import _parse_jd_sections
@@ -735,6 +737,75 @@ def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
             t = _normalize(el.get_text(" ", strip=True))
             if re.match(r"^\d{2}\.\d{2}\.\d{2,4}$", t):
                 j.valid_through = t
+
+
+def _jobbsafari_specific(soup: BeautifulSoup, j: JobListing, html: str) -> None:
+    """jobbsafari.no embeds full job structured data in __NEXT_DATA__ JSON."""
+    import json
+    m = re.search(r'<script id="__NEXT_DATA__"[^>]*>([^<]+)</script>', html)
+    if not m:
+        return
+    try:
+        d = json.loads(m.group(1))
+        je = d.get("props", {}).get("pageProps", {}).get("jobEntry") or {}
+    except Exception:
+        return
+    if not je:
+        return
+
+    if not j.title:
+        j.title = je.get("title", "")
+    # NOTE: jobbsafari's 'company' field is whoever posted the ad (often a
+    # recruiter or contact person, not the actual employer). We use it
+    # anyway since it's the authoritative field on this site.
+    co = je.get("company") or {}
+    if isinstance(co, dict) and co.get("name") and not j.company:
+        j.company = co["name"]
+    # Description
+    desc = je.get("description") or ""
+    if desc and (not j.description or len(j.description) < len(desc)):
+        # strip HTML
+        from bs4 import BeautifulSoup as BS
+        text = _normalize(BS(desc, "lxml").get_text(" ", strip=True))
+        if text:
+            j.description = text[:15000]
+    # Dates: startDate=publish, endDate=deadline
+    if je.get("startDate") and not j.posted_date:
+        j.posted_date = je["startDate"][:10]
+    if je.get("endDate") and not j.valid_through:
+        j.valid_through = je["endDate"][:10]
+    # Locations
+    locs = je.get("locations") or []
+    if isinstance(locs, list) and locs and not j.location:
+        first = locs[0] or {}
+        area = first.get("area") or {}
+        parts = [area.get("name", ""), first.get("address", ""), first.get("zipCode", "")]
+        loc_str = ", ".join(p for p in parts if p)
+        if loc_str:
+            j.location = loc_str
+        if area.get("name") and not j.city:
+            j.city = area["name"]
+        if first.get("zipCode") and not j.postal_code:
+            j.postal_code = first["zipCode"]
+    # Engagement type → employment_type
+    et = je.get("engagement_type") or ""
+    if et and not j.employment_type:
+        j.employment_type = et
+    # Sector
+    sec = je.get("sector") or ""
+    if sec and not j.company_industry:
+        j.company_industry = sec
+    # Apply URL
+    apply = je.get("apply") or {}
+    if isinstance(apply, dict) and apply.get("href"):
+        j.apply_url = apply["href"]
+    # Categories
+    cats = je.get("categories") or []
+    if isinstance(cats, list) and cats:
+        names = [c.get("name", "") for c in cats if isinstance(c, dict)]
+        names = [n for n in names if n]
+        if names and not j.department:
+            j.department = names[0]
 
 
 def _looks_like_job_page(soup: BeautifulSoup, page_url: str) -> bool:

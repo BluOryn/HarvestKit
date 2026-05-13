@@ -9,6 +9,7 @@ from .finn import FinnNoAdapter
 from .generic import GenericAdapter
 from .karrierestart import KarrierestartAdapter
 from .greenhouse import GreenhouseAdapter
+from .jobbsafari import JobbsafariAdapter
 from .jobsch import JobsChAdapter
 from .lever import LeverAdapter
 from .nav import NavNoAdapter
@@ -34,6 +35,7 @@ ADAPTERS: Dict[str, BaseAdapter] = {
     "finn.no": FinnNoAdapter(),
     "nav.no": NavNoAdapter(),
     "karrierestart.no": KarrierestartAdapter(),
+    "jobbsafari.no": JobbsafariAdapter(),
     "generic": GenericAdapter(),
 }
 
@@ -74,4 +76,6 @@ def _detect_adapter(url: str) -> str:
         return "nav.no"
     if "karrierestart.no" in host:
         return "karrierestart.no"
+    if "jobbsafari.no" in host:
+        return "jobbsafari.no"
     return "generic"
