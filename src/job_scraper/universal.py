@@ -156,7 +156,14 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
             r"^(Stilling|Telefon|Mobil|Epost|E[\s\-]?post|Kontakt|Adresse|Søknad|"
             r"Frist|Antall|Søk|Lønn|Søker|Arbeidsgiver|Bedrift|Firma|"
             r"Telephone|Phone|Email|Address|Position|Title|Company|Employer|"
-            r"Contact|Apply|Submit|Reach|Tittel|Nummer)",
+            r"Contact|Apply|Submit|Reach|Tittel|Nummer|"
+            # Site-nav junk (karrierestart, NAV)
+            r"Partnere|Annonsere|Nyheter|Profil|Karriere|Studier|Skoler|"
+            r"Relaterte|Bransje|Yrker|Fagomr|Hjelp|Tilbake|Logg|Logg.inn|"
+            r"Personvern|Cookies|Vilk|Brukervilk|Tilgjengelig|"
+            # English nav
+            r"Login|Register|About|Help|Terms|Privacy|Cookie|Career|Profile|"
+            r"News|Industry|Partner|Advertise|Related)",
             re.I,
         )
         company_suffix_rx = re.compile(r"(group|holding|inc|ltd|gmbh|as|asa|ab|s\.a\.|nv|bv|llc|llp|plc|ag|sa|gbr)\b", re.I)
@@ -668,15 +675,37 @@ def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
         if not getattr(j, field, ""):
             setattr(j, field, value)
 
-    # Company name often in .company-name / .employer-name
-    if not j.company:
-        for sel in (".company-name", ".employer-name", ".jp-company", "[class*='company-name']"):
-            el = soup.select_one(sel)
-            if el:
-                t = _normalize(el.get_text(" ", strip=True))
-                if t and len(t) < 100:
-                    j.company = t
-                    break
+    # Company name — KS strategies, ranked by reliability:
+    # 1. .jobad_company_logo img[alt] — most reliable (KS sets alt = company name)
+    # 2. Title prefix before " - " (e.g. "ABB - Local Trade Compliance officer")
+    # 3. .company-desc h2/h3 (skip <a> since first <a> often = social link)
+    # Skip junk text: nav labels, social-network names, CTA blocks
+    BAD = re.compile(
+        r"(arbeidsgiverguiden|m.t attraktive|partnere|annonsere|nyheter|relaterte|"
+        r"kontaktperson|instagram|facebook|linkedin|twitter|youtube|tiktok|profil)",
+        re.I,
+    )
+    if not j.company or BAD.search(j.company):
+        # Strategy 1: company logo img alt
+        img = soup.select_one(".jobad_company_logo img, [class*='company_logo'] img")
+        if img and img.get("alt"):
+            alt = _normalize(img.get("alt", "").strip())
+            if alt and 2 <= len(alt) <= 80 and not BAD.search(alt):
+                j.company = alt
+        # Strategy 2: title-prefix
+        if (not j.company or BAD.search(j.company)) and j.title and " - " in j.title:
+            prefix = j.title.split(" - ", 1)[0].strip()
+            if 2 <= len(prefix) <= 60 and not re.search(r"\d", prefix):
+                j.company = prefix
+        # Strategy 3: standard selectors
+        if not j.company or BAD.search(j.company):
+            for sel in (".company-name a", ".company-name", ".jp-company"):
+                el = soup.select_one(sel)
+                if el:
+                    t = _normalize(el.get_text(" ", strip=True))
+                    if t and 2 <= len(t) <= 80 and not BAD.search(t):
+                        j.company = t
+                        break
 
     # Description in main article
     if not j.description or len(j.description) < 100:

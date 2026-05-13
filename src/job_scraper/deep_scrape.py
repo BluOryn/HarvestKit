@@ -143,31 +143,35 @@ def deep_scrape_jobs(
             if fetched is not None:
                 final_url, html = fetched
                 if html and len(html) > 200:
-                    # First pass: JSON-LD / microdata extractor
+                    hint = _country_hint(final_url)
+                    got_any = False
+
+                    # Pass 1: JSON-LD / microdata extractor
                     extracted = extract_job_from_page(html, final_url)
                     if extracted and (extracted.title or extracted.description):
                         listing.merge(extracted)
-                        # Even with JSON-LD, run the contact miner on the raw
-                        # HTML to fill recruiter_email/phone fields that may
-                        # only exist outside the JSON-LD blob.
-                        hint = _country_hint(final_url)
-                        contacts = mine_contacts(html, country_hint=hint)
-                        for k, v in contacts.items():
-                            if k == "contact_section_text":
-                                listing.set_extra("contact_section", v)
-                                continue
-                            # mine_contacts is more accurate than the JSON-LD path
-                            # for recruiter_name (uses Norwegian "Stillingstittel"
-                            # separator) — always prefer its value when non-empty.
-                            if v:
-                                setattr(listing, k, v)
-                        return True, "ok"
-                    # Second pass: universal smart-DOM extractor (no Schema.org needed)
-                    hint = _country_hint(final_url)
+                        got_any = True
+
+                    # Pass 2: universal smart-DOM extractor — always run, even when
+                    # JSON-LD found a title. JSON-LD may give title but skip
+                    # company/location/employment_type that live in DOM
+                    # (e.g. karrierestart .fact-card pattern).
                     uni = universal_extract(html, final_url, country_hint=hint)
                     if uni and (uni.title or uni.description):
                         listing.merge(uni)
-                        # Third pass: LLM-fallback for fields heuristics missed
+                        got_any = True
+
+                    # Pass 3: contact miner (recruiter name/phone/email)
+                    contacts = mine_contacts(html, country_hint=hint)
+                    for k, v in contacts.items():
+                        if k == "contact_section_text":
+                            listing.set_extra("contact_section", v)
+                            continue
+                        if v and not getattr(listing, k, ""):
+                            setattr(listing, k, v)
+
+                    if got_any:
+                        # Pass 4: LLM-fallback for fields heuristics missed
                         if cfg.llm_fallback_enabled:
                             try:
                                 from .llm_adapter import llm_enrich

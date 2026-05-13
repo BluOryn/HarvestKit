@@ -1,0 +1,166 @@
+# Norway top-5 IT jobs — VERIFIED URLs after live probe (May 2026).
+#
+# Sites confirmed working from headless requests:
+#   1. finn.no              — occupation codes broken for IT (no IT category in
+#                              top-15 facets). Best: keyword post-filter on title.
+#   2. arbeidsplassen.nav.no — occupationFirstLevels[]=IT (695 jobs, verified)
+#   3. karrierestart.no     — fagomrade=1 = IT (verified via DOM probe)
+#   4. jobbsafari.no        — /yrkeskategori/it-7851593 (279 jobs, verified)
+#   5. thehub.io            — ?countryCode=NO (mostly tech/startup jobs by nature)
+#
+# Excluded: jobbnorge.no (SPA, needs Playwright), webcruiter (SPA, needs Playwright)
+
+run:
+  user_agent: "HarvestKitBot/1.0 (+contact@example.com)"
+  delay_seconds: 0.3
+  max_pages: 30
+  obey_robots: false
+  confirm_permission: true
+  use_playwright: false
+  deep_scrape: true
+  deep_concurrency: 12
+  deep_per_host_concurrency: 4
+  deep_per_host_delay_seconds: 0.3
+  deep_max_retries: 3
+  cache_enabled: false           # FRESH
+  rotate_user_agents: true
+
+  # LLM-fallback off for this run (set true + ANTHROPIC_API_KEY env to enable)
+  llm_fallback_enabled: false
+  llm_min_fields: 5
+  llm_monthly_budget_usd: 5.0
+
+keywords:
+  include: []
+  exclude:
+    - lærling
+    - apprentice
+    - praktikum
+    - internship
+    - praktikant
+
+locations:
+  include: []
+  allow_remote: true
+
+targets:
+  # ---- 1. finn.no — keyword fan-out (q= broken from headless; we use ad-path RX) ----
+  # finn drops q= filter without browser session; adapter grabs all /job/ad/ refs on
+  # the unfiltered page so we just hit the unfiltered fulltime search w/ recency.
+  - name: finn-recent
+    url: "https://www.finn.no/job/fulltime/search.html?published=30"
+    adapter: finn.no
+
+  # ---- 2. NAV — VERIFIED occupationFirstLevels[]=IT (695 jobs) ----
+  - name: nav-it
+    url: "https://arbeidsplassen.nav.no/stillinger?occupationFirstLevels%5B%5D=IT"
+    adapter: nav.no
+  # Plus sec/customer-service categories (image filters)
+  - name: nav-sec
+    url: "https://arbeidsplassen.nav.no/stillinger?occupationFirstLevels%5B%5D=Sikkerhet+og+beredskap"
+    adapter: nav.no
+  # Keyword fan-out for items NAV may misclassify into other categories
+  - name: nav-utvikler
+    url: "https://arbeidsplassen.nav.no/stillinger?q=utvikler"
+    adapter: nav.no
+  - name: nav-developer
+    url: "https://arbeidsplassen.nav.no/stillinger?q=developer"
+    adapter: nav.no
+  - name: nav-engineer
+    url: "https://arbeidsplassen.nav.no/stillinger?q=engineer"
+    adapter: nav.no
+  - name: nav-software
+    url: "https://arbeidsplassen.nav.no/stillinger?q=software"
+    adapter: nav.no
+  - name: nav-consultant
+    url: "https://arbeidsplassen.nav.no/stillinger?q=konsulent"
+    adapter: nav.no
+  - name: nav-architect
+    url: "https://arbeidsplassen.nav.no/stillinger?q=arkitekt"
+    adapter: nav.no
+  - name: nav-data
+    url: "https://arbeidsplassen.nav.no/stillinger?q=data"
+    adapter: nav.no
+  - name: nav-cloud
+    url: "https://arbeidsplassen.nav.no/stillinger?q=cloud"
+    adapter: nav.no
+  - name: nav-devops
+    url: "https://arbeidsplassen.nav.no/stillinger?q=devops"
+    adapter: nav.no
+  - name: nav-network
+    url: "https://arbeidsplassen.nav.no/stillinger?q=nettverk"
+    adapter: nav.no
+  - name: nav-security
+    url: "https://arbeidsplassen.nav.no/stillinger?q=sikkerhet"
+    adapter: nav.no
+  - name: nav-testing
+    url: "https://arbeidsplassen.nav.no/stillinger?q=tester"
+    adapter: nav.no
+  - name: nav-sap
+    url: "https://arbeidsplassen.nav.no/stillinger?q=SAP"
+    adapter: nav.no
+  - name: nav-erp
+    url: "https://arbeidsplassen.nav.no/stillinger?q=ERP"
+    adapter: nav.no
+  - name: nav-crm
+    url: "https://arbeidsplassen.nav.no/stillinger?q=CRM"
+    adapter: nav.no
+  - name: nav-frontend
+    url: "https://arbeidsplassen.nav.no/stillinger?q=frontend"
+    adapter: nav.no
+  - name: nav-backend
+    url: "https://arbeidsplassen.nav.no/stillinger?q=backend"
+    adapter: nav.no
+  - name: nav-fullstack
+    url: "https://arbeidsplassen.nav.no/stillinger?q=fullstack"
+    adapter: nav.no
+  - name: nav-mobile
+    url: "https://arbeidsplassen.nav.no/stillinger?q=mobil"
+    adapter: nav.no
+  - name: nav-android
+    url: "https://arbeidsplassen.nav.no/stillinger?q=android"
+    adapter: nav.no
+  - name: nav-ios
+    url: "https://arbeidsplassen.nav.no/stillinger?q=ios"
+    adapter: nav.no
+  - name: nav-pm
+    url: "https://arbeidsplassen.nav.no/stillinger?q=prosjektleder"
+    adapter: nav.no
+  - name: nav-product
+    url: "https://arbeidsplassen.nav.no/stillinger?q=produkteier"
+    adapter: nav.no
+  - name: nav-ai
+    url: "https://arbeidsplassen.nav.no/stillinger?q=AI"
+    adapter: nav.no
+  - name: nav-ml
+    url: "https://arbeidsplassen.nav.no/stillinger?q=machine+learning"
+    adapter: nav.no
+  - name: nav-support
+    url: "https://arbeidsplassen.nav.no/stillinger?q=it-support"
+    adapter: nav.no
+  - name: nav-marketing
+    url: "https://arbeidsplassen.nav.no/stillinger?q=marketing"
+    adapter: nav.no
+
+  # ---- 3. karrierestart.no — VERIFIED fagomrade=1 (IT/Data) + fagomrade=3 (Tek/Ing) ----
+  - name: karrierestart-it
+    url: "https://karrierestart.no/jobb/?fagomrade=1"
+    adapter: karrierestart.no
+  - name: karrierestart-tek
+    url: "https://karrierestart.no/jobb/?fagomrade=3"
+    adapter: karrierestart.no
+
+  # ---- 4. jobbsafari.no — VERIFIED /yrkeskategori/it-7851593 (279 jobs) ----
+  - name: jobbsafari-it
+    url: "https://jobbsafari.no/ledige-stillinger/yrkeskategori/it-7851593"
+    adapter: generic
+
+  # ---- 5. thehub.io — Norway tech/startup jobs ----
+  - name: thehub-no
+    url: "https://www.thehub.io/jobs?countryCode=NO"
+    adapter: generic
+
+exports:
+  csv:
+    enabled: true
+    path: "output/norway_top5.csv"
