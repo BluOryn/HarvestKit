@@ -281,9 +281,10 @@ General-mode schema (32 fields): `name, category, subcategories, description, ad
 | `smartrecruiters` | `smartrecruiters.com` | Public JSON API |
 | `arbeitsagentur` | `arbeitsagentur.de` | Bundesagentur REST API |
 | `jobs.ch` | `jobs.ch` | Public JSON search API |
-| `finn.no` | `finn.no/job/` | SSR HTML harvest |
-| `nav.no` | `arbeidsplassen.nav.no` | SSR HTML harvest |
-| `karrierestart.no` | `karrierestart.no` | SSR HTML harvest |
+| `finn.no` | `finn.no/job/` | SSR HTML harvest + JSON-LD JobPosting |
+| `nav.no` | `arbeidsplassen.nav.no` | SSR HTML + `__next_f` adData payload |
+| `karrierestart.no` | `karrierestart.no` | SSR HTML harvest + `.fact-card` label mining |
+| `jobbsafari.no` | `jobbsafari.no` | SSR HTML + `__NEXT_DATA__` `jobEntry` payload |
 | `generic` | **anything else** | Sitemap + BFS crawl + JSON-LD + universal extractor + LLM-fallback |
 
 For unknown sites, the `generic` adapter clusters anchors by URL pattern (e.g. `/job/`, `/biz/`, `/listing/`, `/ad/`), follows each, and runs the full extraction stack including LLM-fallback if enabled.
