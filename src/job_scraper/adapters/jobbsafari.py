@@ -37,7 +37,7 @@ class JobbsafariAdapter(BaseAdapter):
 
         for page in range(1, max_pages + 1):
             sep = "&" if "?" in base else "?"
-            url = base if page == 1 else f"{base}{sep}side={page}"
+            url = base if page == 1 else f"{base}{sep}page={page}"
             result = http.get(url)
             if result is None:
                 break

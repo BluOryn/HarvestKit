@@ -153,7 +153,7 @@ targets:
   # ---- 4. jobbsafari.no — VERIFIED /yrkeskategori/it-7851593 (279 jobs) ----
   - name: jobbsafari-it
     url: "https://jobbsafari.no/ledige-stillinger/yrkeskategori/it-7851593"
-    adapter: generic
+    adapter: jobbsafari.no
 
   # ---- 5. thehub.io — Norway tech/startup jobs ----
   - name: thehub-no
