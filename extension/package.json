@@ -22,7 +22,7 @@
     "@types/chrome": "^0.0.287",
     "@types/react": "^18.3.18",
     "@types/react-dom": "^18.3.5",
-    "esbuild": "^0.24.2",
+    "esbuild": "^0.28.0",
     "jsdom": "^25.0.1"
   }
 }
