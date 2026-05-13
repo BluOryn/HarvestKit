@@ -897,12 +897,38 @@ def _jobbsafari_specific(soup: BeautifulSoup, j: JobListing, html: str) -> None:
 
     if not j.title:
         j.title = je.get("title", "")
-    # NOTE: jobbsafari's 'company' field is whoever posted the ad (often a
-    # recruiter or contact person, not the actual employer). We use it
-    # anyway since it's the authoritative field on this site.
+    # jobbsafari `company` field = whoever posted the ad (often recruiter, not
+    # the actual employer). Try to lift the real employer name from the
+    # description body. Falls back to the poster name if no clean signal.
     co = je.get("company") or {}
-    if isinstance(co, dict) and co.get("name") and not j.company:
-        j.company = co["name"]
+    poster_name = co.get("name") if isinstance(co, dict) else None
+
+    desc_html = je.get("description") or ""
+    plain_desc = ""
+    if desc_html:
+        from bs4 import BeautifulSoup as BS
+        plain_desc = _normalize(BS(desc_html, "lxml").get_text(" ", strip=True))
+    real_employer = ""
+    # Reject the regex match when the captured token starts with junk words
+    EMPLOYER_REJECT_RX = re.compile(
+        r"^(Stillingen|The position|Beskrivelse|Description|Om|About|Vi|We|Du|You|"
+        r"Søknad|Søker|Application|This is just|Tasks|Oppgaver)\b",
+        re.I,
+    )
+    if plain_desc:
+        m_emp = re.search(
+            r"(?:Om stillingen|About the position)\s+([A-ZÆØÅ][A-Za-zÆØÅæøåäöü0-9 .,&\-]{2,80}?)"
+            r"(?=\s+(?:Vil|Har|Vi|Er|We|Are|er|har|vi|Beskrivelse|Description|søker|ønsker))",
+            plain_desc,
+        )
+        if m_emp:
+            cand = m_emp.group(1).strip().rstrip(",.")
+            if 1 <= len(cand.split()) <= 8 and not EMPLOYER_REJECT_RX.search(cand):
+                real_employer = cand
+    if real_employer:
+        j.company = real_employer
+    elif not j.company and poster_name:
+        j.company = poster_name
     # Description
     desc = je.get("description") or ""
     if desc and (not j.description or len(j.description) < len(desc)):
