@@ -463,10 +463,10 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
             elif k == "recruiter_email" and not j.recruiter_email:
                 j.recruiter_email = v
 
-    if not j.seniority and j.title:
+    if not j.seniority:
         from .extract import SENIORITY
         for name, rx in SENIORITY:
-            if rx.search(j.title):
+            if (j.title and rx.search(j.title)) or (j.description and rx.search(j.description)):
                 j.seniority = name
                 break
     return j
