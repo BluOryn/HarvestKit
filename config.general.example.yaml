@@ -5,7 +5,7 @@
 mode: general
 
 run:
-  user_agent: "GeneralScraperBot/1.0 (+contact@example.com)"
+  user_agent: "GeneralScraperBot/1.0 (+hriday.vig@bluoryn.com)"
   delay_seconds: 1.0
   obey_robots: false
   confirm_permission: true

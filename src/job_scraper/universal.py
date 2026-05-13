@@ -318,7 +318,13 @@ def _uniq_preserve(items: List[str]) -> List[str]:
 
 GENERIC_TITLE_SUFFIX = re.compile(
     r"\s*[\|\-–—]\s*(FINN\.no|NAV|arbeidsplassen|LinkedIn|Indeed|Glassdoor|Monster|"
-    r"jobs\.ch|Stepstone|Workday|Jobbnorge|Greenhouse|Lever|Workable).*$",
+    r"jobs\.ch|Stepstone|Workday|Jobbnorge|Greenhouse|Lever|Workable|thehub|"
+    r"jobbsafari|karrierestart).*$",
+    re.I,
+)
+# Sites that prefix their site name to the title (e.g. "The Hub | <Title> | <Co>")
+TITLE_SITE_PREFIX = re.compile(
+    r"^\s*(The\s+Hub|Jobbsafari|Karrierestart|FINN)\s*[\|\-–—]\s*",
     re.I,
 )
 
@@ -338,9 +344,21 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
     j.source_domain = parsed.netloc
 
     # Title
+    def _clean_title(s: str) -> str:
+        s = GENERIC_TITLE_SUFFIX.sub("", s).strip()
+        s = TITLE_SITE_PREFIX.sub("", s).strip()
+        # Strip trailing "| <Company>" when 2 pipes total
+        parts = [p.strip() for p in s.split("|") if p.strip()]
+        if len(parts) == 2:
+            s = parts[0]
+        elif len(parts) >= 2:
+            # "<Title> | <Company>" pattern
+            s = " | ".join(parts[:-1])
+        return s
+
     og_t = _meta(soup, "og:title")
     if og_t:
-        j.title = GENERIC_TITLE_SUFFIX.sub("", og_t).strip()
+        j.title = _clean_title(og_t)
     if not j.title:
         h1 = soup.find("h1")
         if h1:
@@ -348,7 +366,7 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
     if not j.title:
         t = soup.find("title")
         if t:
-            j.title = GENERIC_TITLE_SUFFIX.sub("", t.get_text(" ", strip=True)).strip()
+            j.title = _clean_title(t.get_text(" ", strip=True))
 
     # Description (largest text block in main/article)
     desc_node = _main_content_node(soup)
@@ -416,6 +434,7 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
 
     # ---- Site-specific selectors (improve coverage where universal heuristics miss) ----
     if "arbeidsplassen.nav.no" in parsed.netloc:
+        _nav_no_adData(html, j)        # NEW: parse __next_f adData payload first
         _nav_no_specific(soup, j)
     elif "karrierestart.no" in parsed.netloc:
         _karrierestart_specific(soup, j)
@@ -737,6 +756,129 @@ def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
             t = _normalize(el.get_text(" ", strip=True))
             if re.match(r"^\d{2}\.\d{2}\.\d{2,4}$", t):
                 j.valid_through = t
+
+
+def _nav_no_adData(html: str, j: JobListing) -> None:
+    """NAV embeds full job structured data in self.__next_f.push() chunks.
+    Concatenate all chunks, locate the `adData` key, depth-balance parse the
+    JSON object, then map its fields. This is the richest data source on NAV
+    pages — gives us valid_through, application_email, employer industry,
+    apply_url, category list, work-languages, location detail, etc.
+    """
+    import json as _json
+    chunks = re.findall(r'self\.__next_f\.push\(\[\d+,(".*?")\]\)', html, re.S)
+    if not chunks:
+        return
+    full = ""
+    for c in chunks:
+        try:
+            full += _json.loads(c)
+        except Exception:
+            continue
+    if '"adData":' not in full:
+        return
+
+    # Depth-balanced JSON object extraction starting at first { after "adData":
+    idx = full.find('"adData":')
+    start = full.find("{", idx)
+    if start < 0:
+        return
+    depth = 0
+    in_str = False
+    esc = False
+    end = start
+    for i in range(start, min(len(full), start + 100_000)):
+        ch = full[i]
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+        if not in_str:
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+    try:
+        d = _json.loads(full[start:end])
+    except Exception:
+        return
+
+    # Map adData fields → JobListing
+    if not j.title and d.get("title"):
+        j.title = d["title"]
+    if not j.valid_through and d.get("expires"):
+        j.valid_through = d["expires"][:10]
+    if not j.posted_date and d.get("published"):
+        j.posted_date = d["published"][:10]
+    if not j.employment_type and d.get("engagementType"):
+        j.employment_type = d["engagementType"]
+    if not j.external_id and d.get("reference"):
+        j.external_id = d["reference"]
+    if not j.requisition_id and d.get("reference"):
+        j.requisition_id = d["reference"]
+
+    # Employer block — NAV adData is authoritative, override universal-extract guesses
+    emp = d.get("employer") or {}
+    if isinstance(emp, dict):
+        if emp.get("name"):
+            j.company = emp["name"].strip()
+        if emp.get("sector"):
+            j.company_industry = emp["sector"]
+        if emp.get("homepage"):
+            j.company_website = emp["homepage"]
+
+    # Application block
+    app = d.get("application") or {}
+    if isinstance(app, dict):
+        if not j.application_email and app.get("applicationEmail"):
+            j.application_email = app["applicationEmail"]
+        if not j.apply_url and app.get("applicationUrl"):
+            j.apply_url = app["applicationUrl"]
+
+    # Location: take first entry in locationList (override universal guesses)
+    locs = d.get("locationList") or []
+    if isinstance(locs, list) and locs:
+        first = locs[0] if isinstance(locs[0], dict) else {}
+        parts = [first.get("address", ""), first.get("postalCode", ""), first.get("city", "")]
+        loc_str = ", ".join(p for p in parts if p)
+        if loc_str:
+            j.location = loc_str
+        if first.get("city"):
+            j.city = first["city"].title()
+        if first.get("postalCode"):
+            j.postal_code = first["postalCode"]
+        if first.get("county"):
+            j.region = first["county"].title()
+
+    # Category list → department + extras
+    cats = d.get("categoryList") or []
+    if isinstance(cats, list) and cats:
+        cat_names = []
+        for c in cats:
+            if isinstance(c, dict) and c.get("name"):
+                cat_names.append(c["name"])
+        if cat_names and not j.department:
+            j.department = cat_names[0]
+        # Store full category list for transparency
+        if cat_names:
+            j.set_extra("nav_categories", " | ".join(cat_names))
+
+    # Language
+    langs = d.get("workLanguages") or []
+    if isinstance(langs, list) and langs and not j.language:
+        j.language = ", ".join(str(x) for x in langs)
+
+    # Work extent / hours
+    ext = d.get("extent") or []
+    if isinstance(ext, list) and ext and not j.employment_type:
+        j.employment_type = ", ".join(ext)
 
 
 def _jobbsafari_specific(soup: BeautifulSoup, j: JobListing, html: str) -> None:

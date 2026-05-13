@@ -1,0 +1,58 @@
+name: Bug report
+description: Something doesn't work as documented
+title: "[bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What went wrong and what did you expect?
+      placeholder: |
+        I ran `python run.py --config config.norway-top5.yaml` and ...
+    validations:
+      required: true
+  - type: input
+    id: site
+    attributes:
+      label: Affected site / adapter
+      placeholder: "e.g. finn.no / karrierestart / generic"
+  - type: input
+    id: version
+    attributes:
+      label: HarvestKit version / commit
+      placeholder: "v0.3.0 or commit SHA"
+    validations:
+      required: true
+  - type: dropdown
+    id: env
+    attributes:
+      label: Environment
+      options:
+        - Python CLI
+        - Chrome extension
+        - Both
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Clone repo
+        2. Edit config.example.yaml with ...
+        3. Run ...
+        4. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / CSV row
+      description: Paste relevant log output or a sample CSV row (redact PII)
+      render: shell
+  - type: textarea
+    id: system
+    attributes:
+      label: System
+      placeholder: "OS, Python version, Chrome version"

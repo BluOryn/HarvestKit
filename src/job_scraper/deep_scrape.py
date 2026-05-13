@@ -146,6 +146,27 @@ def deep_scrape_jobs(
                     hint = _country_hint(final_url)
                     got_any = False
 
+                    # Pass 0: For sites that hide critical fields behind client-side
+                    # JS (e.g. karrierestart contact block), re-fetch with Playwright
+                    # and use its HTML for the rest of the pipeline.
+                    needs_js = (
+                        cfg.use_playwright_fallback
+                        and playwright_fetcher is not None
+                        and (
+                            "karrierestart.no" in final_url
+                            or "candidate.webcruiter.com" in final_url
+                        )
+                    )
+                    if needs_js:
+                        try:
+                            pw_result = playwright_fetcher.get(final_url)  # type: ignore[attr-defined]
+                            if pw_result is not None:
+                                _, pw_html = pw_result
+                                if pw_html and len(pw_html) > len(html) * 0.7:
+                                    html = pw_html
+                        except Exception as exc:
+                            logging.debug("Playwright re-fetch failed for %s: %s", final_url, exc)
+
                     # Pass 1: JSON-LD / microdata extractor
                     extracted = extract_job_from_page(html, final_url)
                     if extracted and (extracted.title or extracted.description):

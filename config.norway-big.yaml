@@ -1,5 +1,5 @@
 run:
-  user_agent: HarvestKitBot/1.0 (+contact@example.com)
+  user_agent: HarvestKitBot/1.0 (+hriday.vig@bluoryn.com)
   delay_seconds: 0.2
   max_pages: 10
   obey_robots: false

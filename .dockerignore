@@ -1,0 +1,17 @@
+.git
+.github
+.venv
+.cache
+output
+extension/node_modules
+extension/dist
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+coverage.xml
+*.log
+*.csv
+proxies.txt

@@ -1,0 +1,58 @@
+name: New site adapter
+description: Request support for a new job board or business directory
+title: "[adapter] <site name>"
+labels: ["adapter", "good-first-issue"]
+body:
+  - type: input
+    id: site
+    attributes:
+      label: Site URL
+      placeholder: "https://example.com"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Scraper mode
+      options:
+        - Job board
+        - Business directory
+        - Both
+    validations:
+      required: true
+  - type: input
+    id: listing-url
+    attributes:
+      label: Listing URL pattern
+      placeholder: "https://example.com/jobs?category=it"
+    validations:
+      required: true
+  - type: input
+    id: detail-url
+    attributes:
+      label: Detail URL pattern
+      placeholder: "https://example.com/job/<id>"
+    validations:
+      required: true
+  - type: dropdown
+    id: data-source
+    attributes:
+      label: Data exposure
+      options:
+        - Public JSON-LD JobPosting
+        - Microdata
+        - Custom HTML labels
+        - __NEXT_DATA__ / SPA hydration JSON
+        - Requires Playwright
+        - Behind auth wall
+    validations:
+      required: true
+  - type: textarea
+    id: filters
+    attributes:
+      label: Useful filter URLs
+      description: "URLs you've found that filter results (e.g. IT category)"
+  - type: textarea
+    id: notes
+    attributes:
+      label: Other notes

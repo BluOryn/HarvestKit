@@ -66,7 +66,7 @@ def main() -> None:
         return
 
     http = HttpClient(
-        user_agent=run_cfg.get("user_agent", "GeneralScraperBot/1.0 (+contact@example.com)"),
+        user_agent=run_cfg.get("user_agent", "GeneralScraperBot/1.0 (+hriday.vig@bluoryn.com)"),
         delay_seconds=run_cfg.get("delay_seconds", 1.0),
         obey_robots=run_cfg.get("obey_robots", True),
         cache_enabled=run_cfg.get("cache_enabled", True),

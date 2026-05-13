@@ -1,0 +1,25 @@
+# docker-compose for local development / scheduled scraping.
+#
+# Usage:
+#   docker compose run --rm harvestkit --config /app/configs/config.example.yaml
+#
+# Mounts:
+#   - ./configs   → /app/configs    (your YAML files)
+#   - ./output    → /app/output     (CSV / JSON outputs)
+#   - ./.cache    → /app/.cache     (SQLite HTTP + LLM cache)
+services:
+  harvestkit:
+    build:
+      context: .
+      target: playwright
+    image: harvestkit:local
+    volumes:
+      - ./configs:/app/configs:ro
+      - ./output:/app/output
+      - ./.cache:/app/.cache
+    environment:
+      # Set in a .env file or your shell — never commit secrets
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+    # Override at run time:
+    #   docker compose run --rm harvestkit --config /app/configs/config.norway-top5.yaml
+    command: ["--help"]

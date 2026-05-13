@@ -2,6 +2,8 @@
 
 > Universal scraper — works on **any website** (job boards, business directories, listings). Python CLI + Chrome extension share the same 60-field schema.
 
+[![CI](https://github.com/BluOryn/HarvestKit/actions/workflows/ci.yml/badge.svg)](https://github.com/BluOryn/HarvestKit/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/BluOryn/HarvestKit/actions/workflows/codeql.yml/badge.svg)](https://github.com/BluOryn/HarvestKit/actions/workflows/codeql.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-green.svg)](https://developer.chrome.com/docs/extensions/mv3/intro/)
@@ -19,7 +21,7 @@ A Chrome MV3 extension piggybacks on the real browser session to bypass DataDome
 
 ---
 
-## Quick Start (5 minutes)
+## Quick Start
 
 ### 1. Install Python 3.10+
 
@@ -132,7 +134,7 @@ Output → `output/jobs.csv` (or whatever `exports.csv.path` says).
 ```yaml
 run:
   # ---- Identity ----
-  user_agent: "HarvestKitBot/1.0 (+contact@example.com)"
+  user_agent: "HarvestKitBot/1.0 (+hriday.vig@bluoryn.com)"
   rotate_user_agents: true       # rotate Chrome/Firefox/Safari pool
   obey_robots: false              # respect robots.txt; set true if required
   confirm_permission: true        # required to run — acknowledge you have permission

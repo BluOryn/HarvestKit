@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from .adapters import get_adapter
 from .config import AppConfig, KeywordConfig, LocationConfig, RunConfig, TargetConfig, load_config
 from .dedupe import dedupe_jobs
+from .crawl import PlaywrightFetcher
 from .deep_scrape import DeepScrapeConfig, deep_scrape_jobs
 from .export import run_exports
 from .http import HttpClient
@@ -67,29 +68,60 @@ def main() -> None:
         llm_monthly_budget_usd=config.run.llm_monthly_budget_usd,
     )
 
-    all_jobs = []
-    for target in config.targets:
-        adapter = get_adapter(target)
-        logging.info("Scraping %s (%s)", target.name, target.url)
+    # Lazy-open Playwright only if any target needs it
+    pw_fetcher = None
+    if config.run.use_playwright:
+        deep_cfg.use_playwright_fallback = True
         try:
-            jobs = adapter.fetch_jobs(target, config.run, http)
+            pw_fetcher = PlaywrightFetcher().__enter__()
         except Exception as exc:
-            logging.warning("Adapter failed for %s: %s", target.name, exc)
-            continue
-        for job in jobs:
-            job.source = target.name
-            job.scraped_at = datetime.now(timezone.utc).isoformat()
-        # Deep-scrape every posting that has a URL — always, no skipping.
-        # The merge in JobListing.merge() only overwrites when the new value is longer,
-        # so re-running on already-rich rows is idempotent (and benefits from cache).
-        if config.run.deep_scrape and jobs:
-            needs_deep = [j for j in jobs if (j.job_url or j.apply_url)]
-            if needs_deep:
-                logging.info("%s: deep-scraping %d/%d postings…", target.name, len(needs_deep), len(jobs))
-                def _on_progress(done: int, ok: int, failed: int) -> None:
-                    logging.info("  %s: %d done · %d ok · %d failed", target.name, done, ok, failed)
-                deep_scrape_jobs(needs_deep, http, deep_cfg, on_progress=_on_progress)
-        all_jobs.extend(jobs)
+            logging.warning("Playwright init failed: %s — falling back to HTTP-only", exc)
+            pw_fetcher = None
+
+    try:
+        all_jobs = []
+        for target in config.targets:
+            adapter = get_adapter(target)
+            logging.info("Scraping %s (%s)", target.name, target.url)
+            # If the target opts into Playwright, pre-render the search page so the
+            # adapter's plain HTTP fetch picks up the (now cached) JS-rendered HTML.
+            if target.use_playwright and pw_fetcher is not None:
+                try:
+                    pw_result = pw_fetcher.get(target.url)
+                    if pw_result is not None:
+                        pw_final, pw_html = pw_result
+                        cache = getattr(http, "_cache", None)
+                        if cache is not None and pw_html:
+                            try:
+                                cache.put(target.url, pw_final, pw_html)
+                            except Exception as cexc:
+                                logging.debug("cache put failed: %s", cexc)
+                except Exception as exc:
+                    logging.warning("Playwright pre-fetch failed for %s: %s", target.name, exc)
+            try:
+                jobs = adapter.fetch_jobs(target, config.run, http)
+            except Exception as exc:
+                logging.warning("Adapter failed for %s: %s", target.name, exc)
+                continue
+            for job in jobs:
+                job.source = target.name
+                job.scraped_at = datetime.now(timezone.utc).isoformat()
+            if config.run.deep_scrape and jobs:
+                needs_deep = [j for j in jobs if (j.job_url or j.apply_url)]
+                if needs_deep:
+                    logging.info("%s: deep-scraping %d/%d postings…", target.name, len(needs_deep), len(jobs))
+                    def _on_progress(done: int, ok: int, failed: int) -> None:
+                        logging.info("  %s: %d done · %d ok · %d failed", target.name, done, ok, failed)
+                    deep_scrape_jobs(needs_deep, http, deep_cfg,
+                                     on_progress=_on_progress,
+                                     playwright_fetcher=pw_fetcher)
+            all_jobs.extend(jobs)
+    finally:
+        if pw_fetcher is not None:
+            try:
+                pw_fetcher.__exit__(None, None, None)
+            except Exception:
+                pass
 
     after_keywords = _filter_by_keywords(all_jobs, config.keywords)
     after_location = _filter_by_location(after_keywords, config.locations)

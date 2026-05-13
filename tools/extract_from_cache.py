@@ -44,7 +44,7 @@ def main() -> None:
 
     # 1. Pull all listings from API (uses cache — no extra hits if listing pages cached).
     http = HttpClient(
-        user_agent="HarvestKitBot/1.0 (+contact@example.com)",
+        user_agent="HarvestKitBot/1.0 (+hriday.vig@bluoryn.com)",
         delay_seconds=0.5,
         obey_robots=False,
         cache_enabled=True,

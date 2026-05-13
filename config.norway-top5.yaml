@@ -11,12 +11,12 @@
 # Excluded: jobbnorge.no (SPA, needs Playwright), webcruiter (SPA, needs Playwright)
 
 run:
-  user_agent: "HarvestKitBot/1.0 (+contact@example.com)"
+  user_agent: "HarvestKitBot/1.0 (+hriday.vig@bluoryn.com)"
   delay_seconds: 0.3
   max_pages: 30
   obey_robots: false
   confirm_permission: true
-  use_playwright: false
+  use_playwright: true
   deep_scrape: true
   deep_concurrency: 12
   deep_per_host_concurrency: 4
@@ -44,9 +44,8 @@ locations:
   allow_remote: true
 
 targets:
-  # ---- 1. finn.no — keyword fan-out (q= broken from headless; we use ad-path RX) ----
-  # finn drops q= filter without browser session; adapter grabs all /job/ad/ refs on
-  # the unfiltered page so we just hit the unfiltered fulltime search w/ recency.
+  # ---- 1. finn.no — anonymous list cap (~57 ads). q= ignored even via Playwright. ----
+  # Truth: finn requires logged-in session to honor q=. Best we can do anon = unfiltered.
   - name: finn-recent
     url: "https://www.finn.no/job/fulltime/search.html?published=30"
     adapter: finn.no

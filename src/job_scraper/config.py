@@ -6,7 +6,7 @@ import yaml
 
 @dataclass
 class RunConfig:
-    user_agent: str = "JobScraperBot/1.0 (+contact@example.com)"
+    user_agent: str = "JobScraperBot/1.0 (+hriday.vig@bluoryn.com)"
     delay_seconds: float = 1.0
     max_pages: int = 200
     max_depth: int = 3

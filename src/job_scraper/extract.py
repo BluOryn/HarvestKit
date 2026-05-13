@@ -203,8 +203,13 @@ def _apply_jsonld(j: JobListing, ld: Dict[str, Any]) -> None:
     loc_type = ld.get("jobLocationType")
     if loc_type and re.search(r"telecommute|remote", json.dumps(loc_type), re.I):
         j.remote_type = j.remote_type or "remote"
+        # If no physical location, mark location as "Remote" so it's not empty
+        if not j.location:
+            j.location = "Remote"
     elif ld.get("applicantLocationRequirements"):
         j.remote_type = j.remote_type or "remote"
+        if not j.location:
+            j.location = "Remote"
 
     et = ld.get("employmentType")
     if isinstance(et, list):

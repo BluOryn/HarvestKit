@@ -1,5 +1,5 @@
 run:
-  user_agent: JobScraperBot/1.0 (+contact@example.com)
+  user_agent: JobScraperBot/1.0 (+hriday.vig@bluoryn.com)
   delay_seconds: 0.05
   max_pages: 100
   obey_robots: false
