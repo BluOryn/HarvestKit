@@ -1,34 +1,40 @@
 run:
-  user_agent: JobScraperBot/1.0 (+hriday.vig@bluoryn.com)
-  delay_seconds: 0.05
-  max_pages: 100
+  user_agent: "HarvestKitBot/1.0 (+hriday.vig@bluoryn.com)"
+  delay_seconds: 0.3
+  max_pages: 100               # API returns ~20 jobs/page; cap at ~2000 jobs to stay under WAF threshold
   obey_robots: false
   confirm_permission: true
   use_playwright: false
   deep_scrape: true
-  deep_concurrency: 16
-  deep_per_host_concurrency: 8
-  deep_per_host_delay_seconds: 0.1
+  deep_concurrency: 6          # lower than prev to avoid CloudFront 403 IP-ban
+  deep_per_host_concurrency: 2
+  deep_per_host_delay_seconds: 0.6
   deep_max_retries: 3
-  cache_enabled: true
+  cache_enabled: false         # FRESH
   rotate_user_agents: true
   proxies: []
-  proxy_rotation: random
-  proxy_max_failures: 1
-  proxy_cooldown_seconds: 900
+  proxy_rotation: round_robin
+  proxy_max_failures: 3
+  proxy_cooldown_seconds: 300
+
 keywords:
   include: []
-  exclude: []
-  sectors: []
+  exclude:
+    - apprentice
+    - praktikum
+    - internship
+    - lärling
+
 locations:
   include: []
-  exclude: []
   allow_remote: true
+
 targets:
-- name: jobs.ch-smoketest
-  url: https://www.jobs.ch/en/vacancies/?category=106&category=146&category=156&category=167&employment-type=1&employment-type=2&employment-type=4&employment-type=5&publication-date=30&term=
-  adapter: jobs.ch
+  - name: jobs-ch-it
+    url: "https://www.jobs.ch/en/vacancies/?category=106&category=146&category=156&category=167&employment-type=1&employment-type=2&employment-type=4&employment-type=5&publication-date=30&term="
+    adapter: jobs.ch
+
 exports:
   csv:
     enabled: true
-    path: output/jobsch_full.csv
+    path: "output/jobsch_full.csv"

@@ -1,21 +1,23 @@
-"""jobs.ch adapter — uses the public JSON search API.
+"""jobs.ch adapter.
 
-The jobs.ch site is a React SPA, so plain HTTP fetches of /en/vacancies/?... don't yield
-job cards. But the same data is exposed via /api/v1/public/search?... as plain JSON.
+Two listing paths:
 
-The adapter:
-  1. Parses any user-supplied search URL (e.g. /en/vacancies/?category=...&publication-date=30)
-     and forwards every query parameter to the API.
-  2. Paginates the API (20 results/page by default) until num_pages or `run.max_pages`.
-  3. Builds JobListing stubs from the API payload.
-  4. Returns the stubs; main.py's deep_scrape pass will fetch each detail URL and
-     enrich with description, salary, recruiter, etc.
+1. **HTML search page** (`/en/vacancies/?category=...&employment-type=...&publication-date=30`)
+   — honors all filter querystring params. UUIDs render in the SSR HTML
+   (22/page). Use this when the target URL is the public search page.
+2. **JSON API** (`/api/v1/public/search`) — IGNORES filter querystring
+   (`category`, `employment-type`, etc.) and returns all jobs. Useful only
+   as a fallback when the HTML path can't be parsed.
+
+Either way, we return JobListing stubs with the canonical detail URL,
+and main.py's deep_scrape visits each detail page.
 """
 from __future__ import annotations
 
 import logging
+import re
 from typing import List, Tuple
-from urllib.parse import parse_qsl, urlencode, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from ..config import RunConfig, TargetConfig
 from ..http import HttpClient
@@ -27,6 +29,11 @@ from .base import BaseAdapter
 API_BASE = "https://www.jobs.ch/api/v1/public/search"
 PAGE_SIZE = 20  # API default
 
+# Detail UUID pattern from the SSR HTML listing.
+DETAIL_RX = re.compile(
+    r"/(?:en|de|fr|it)/(?:vacancies|stellenangebote|offres-emplois|offerte-lavoro)/detail/([\w\-]{36})/?"
+)
+
 
 class JobsChAdapter(BaseAdapter):
     def fetch_jobs(
@@ -35,10 +42,60 @@ class JobsChAdapter(BaseAdapter):
         run_config: RunConfig,
         http: HttpClient,
     ) -> List[JobListing]:
+        # If user passed an HTML search URL, walk it page-by-page — server honors
+        # the filter querystring. Otherwise fall back to the API.
+        parsed = urlparse(target.url)
+        if "/vacancies/" in parsed.path or "/stellenangebote/" in parsed.path or "/offres-emplois/" in parsed.path:
+            return self._fetch_via_html(target, run_config, http)
+        return self._fetch_via_api(target, run_config, http)
+
+    def _fetch_via_html(
+        self,
+        target: TargetConfig,
+        run_config: RunConfig,
+        http: HttpClient,
+    ) -> List[JobListing]:
+        max_pages = max(1, run_config.max_pages or 100)
+        seen: set[str] = set()
+        listings: List[JobListing] = []
+        base = target.url
+        sep = "&" if "?" in base else "?"
+        for page in range(1, max_pages + 1):
+            url = base if page == 1 else f"{base}{sep}page={page}"
+            result = http.get(url)
+            if result is None:
+                logging.info("jobs.ch HTML: empty response at page %d", page)
+                break
+            _, html = result
+            uuids = DETAIL_RX.findall(html)
+            new = 0
+            for uid in uuids:
+                if uid in seen:
+                    continue
+                seen.add(uid)
+                detail = f"https://www.jobs.ch/en/vacancies/detail/{uid}/"
+                listing = JobListing(
+                    job_url=canonicalize_url(detail),
+                    apply_url=canonicalize_url(detail),
+                    external_id=uid,
+                    source_ats="jobs.ch",
+                    source_domain="www.jobs.ch",
+                    country="Switzerland",
+                )
+                listings.append(listing)
+                new += 1
+            if new == 0:
+                break
+        logging.info("jobs.ch HTML: %d listings (filter honored)", len(listings))
+        return listings
+
+    def _fetch_via_api(
+        self,
+        target: TargetConfig,
+        run_config: RunConfig,
+        http: HttpClient,
+    ) -> List[JobListing]:
         params = self._extract_query_params(target.url)
-        # The API uses singular 'employment-type', 'category' as repeated keys; parse_qsl
-        # already preserves duplicates as separate (k, v) pairs, so urlencode-with-doseq
-        # round-trips correctly.
         listings: List[JobListing] = []
         seen_ids = set()
         max_pages = max(1, run_config.max_pages or 200)
@@ -49,7 +106,7 @@ class JobsChAdapter(BaseAdapter):
             url = f"{API_BASE}?{urlencode(page_params, doseq=True)}"
             payload = http.get_json(url, headers={"Accept": "application/json"})
             if not payload:
-                logging.warning("jobs.ch: empty payload at page %d (%s)", page, url)
+                logging.warning("jobs.ch API: empty payload at page %d", page)
                 break
             docs = payload.get("documents") or []
             if not docs:
@@ -65,7 +122,7 @@ class JobsChAdapter(BaseAdapter):
             num_pages = payload.get("num_pages") or 0
             if num_pages and page >= num_pages:
                 break
-        logging.info("jobs.ch: %d listings", len(listings))
+        logging.info("jobs.ch API: %d listings (filter IGNORED, all-jobs corpus)", len(listings))
         return listings
 
     def _extract_query_params(self, url: str) -> List[Tuple[str, str]]:
