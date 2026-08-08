@@ -1,4 +1,5 @@
 """Smoke tests — no network, no browser. Exercise pure-Python paths."""
+
 from __future__ import annotations
 
 import sys
@@ -12,13 +13,13 @@ if str(SRC) not in sys.path:
 
 def test_imports():
     """Top-level modules import cleanly."""
-    import job_scraper.main  # noqa: F401
     import job_scraper.config  # noqa: F401
-    import job_scraper.models  # noqa: F401
-    import job_scraper.extract  # noqa: F401
-    import job_scraper.universal  # noqa: F401
     import job_scraper.deep_scrape  # noqa: F401
+    import job_scraper.extract  # noqa: F401
     import job_scraper.llm_adapter  # noqa: F401
+    import job_scraper.main  # noqa: F401
+    import job_scraper.models  # noqa: F401
+    import job_scraper.universal  # noqa: F401
 
 
 def test_adapter_registry():
@@ -26,9 +27,21 @@ def test_adapter_registry():
     from job_scraper.adapters import ADAPTERS
 
     expected = {
-        "greenhouse", "lever", "smartrecruiters", "personio", "ashby",
-        "recruitee", "workable", "workday", "arbeitsagentur", "jobs.ch",
-        "finn.no", "nav.no", "karrierestart.no", "jobbsafari.no", "generic",
+        "greenhouse",
+        "lever",
+        "smartrecruiters",
+        "personio",
+        "ashby",
+        "recruitee",
+        "workable",
+        "workday",
+        "arbeitsagentur",
+        "jobs.ch",
+        "finn.no",
+        "nav.no",
+        "karrierestart.no",
+        "jobbsafari.no",
+        "generic",
     }
     assert expected.issubset(ADAPTERS.keys())
 
@@ -68,5 +81,5 @@ def test_phone_filter_rejects_finnkode():
     from job_scraper.universal import _valid_phone
 
     assert _valid_phone("462751961") is False  # raw 9-digit, no separators
-    assert _valid_phone("12345678") is False   # raw 8-digit, no separators
+    assert _valid_phone("12345678") is False  # raw 8-digit, no separators
     assert _valid_phone("+47 95 83 21 97") is True
