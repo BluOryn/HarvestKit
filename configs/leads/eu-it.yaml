@@ -1,0 +1,39 @@
+# EU IT-sector lead seed.
+#
+# Only *search-style* adapters work as a seed: they enumerate companies from a
+# query. The per-company ATS adapters (greenhouse, lever, ashby, personio) need
+# a board slug you already know, so they can discover nothing and are absent
+# here on purpose.
+#
+# A company returned by any of these queries employs IT staff by construction,
+# which is the whole targeting criterion.
+run:
+  confirm_permission: true
+  deep_scrape: false # the lead pipeline does its own per-company crawling
+  delay_seconds: 0.0 # per-host throttling does the pacing; hosts are all distinct
+  max_pages: 25
+  obey_robots: true
+  cache_enabled: true
+  cache_ttl_seconds: 604800 # a week — a re-run today must not refetch
+  rotate_user_agents: true
+  deep_per_host_concurrency: 2
+  deep_per_host_delay_seconds: 1.0
+
+targets:
+  # Germany — Bundesagentur für Arbeit, the official federal job board.
+  # One target per role family; `was` is the query, `wo` the region.
+  - name: de-softwareentwickler
+    url: https://www.arbeitsagentur.de/jobsuche/?was=Softwareentwickler&wo=Deutschland&size=100&max_pages=25
+    adapter: arbeitsagentur
+  - name: de-it-administrator
+    url: https://www.arbeitsagentur.de/jobsuche/?was=IT-Administrator&wo=Deutschland&size=100&max_pages=15
+    adapter: arbeitsagentur
+  - name: de-devops
+    url: https://www.arbeitsagentur.de/jobsuche/?was=DevOps%20Engineer&wo=Deutschland&size=100&max_pages=10
+    adapter: arbeitsagentur
+  - name: de-data-engineer
+    url: https://www.arbeitsagentur.de/jobsuche/?was=Data%20Engineer&wo=Deutschland&size=100&max_pages=10
+    adapter: arbeitsagentur
+  - name: de-fachinformatiker
+    url: https://www.arbeitsagentur.de/jobsuche/?was=Fachinformatiker&wo=Deutschland&size=100&max_pages=15
+    adapter: arbeitsagentur

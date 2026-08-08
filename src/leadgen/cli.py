@@ -1,0 +1,130 @@
+"""Single command: seed, harvest, score, cut, write."""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+from pathlib import Path
+
+from job_scraper.adapters import get_adapter
+from job_scraper.config import load_config, resolve_config_path
+from job_scraper.http import HttpClient
+
+from .checkpoint import Checkpoint
+from .export import write_csv
+from .pipeline import process_companies
+from .score.quota import select
+from .seed.jobboard import companies_from_listings
+
+log = logging.getLogger("leadgen")
+
+
+def _build_http(config) -> HttpClient:
+    return HttpClient(
+        user_agent=config.run.user_agent,
+        delay_seconds=config.run.delay_seconds,
+        obey_robots=config.run.obey_robots,
+        # Company sites are slower and flakier than ATS APIs, and a lead lost to
+        # an 8 s timeout is a lead lost for good, so this is deliberately patient.
+        timeout_seconds=20.0,
+        max_retries=1,
+        cache_enabled=config.run.cache_enabled,
+        cache_ttl_seconds=config.run.cache_ttl_seconds,
+        cache_path=config.run.cache_path,
+        rotate_user_agents=config.run.rotate_user_agents,
+        per_host_concurrency=config.run.deep_per_host_concurrency,
+        per_host_min_delay=config.run.deep_per_host_delay_seconds,
+        proxies=config.run.proxies,
+        proxy_rotation=config.run.proxy_rotation,
+        proxy_max_failures=config.run.proxy_max_failures,
+        proxy_cooldown_seconds=config.run.proxy_cooldown_seconds,
+    )
+
+
+def _collect_listings(config, http) -> list:
+    listings: list = []
+    for target in config.targets:
+        try:
+            found = get_adapter(target).fetch_jobs(target, config.run, http)
+            log.info("seed: %-24s %5d listings", target.name, len(found))
+            listings.extend(found)
+        except Exception as exc:
+            log.warning("seed: %s failed: %s", target.name, exc)
+    return listings
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="leadgen", description="Harvest a lead list.")
+    parser.add_argument("--config", required=True, help="config name or path")
+    parser.add_argument("--target", type=int, default=1000, help="exact number of rows wanted")
+    parser.add_argument("--output", default="output/leads.csv")
+    parser.add_argument("--checkpoint", default=".cache/leadgen.sqlite")
+    parser.add_argument("--concurrency", type=int, default=8)
+    parser.add_argument("--max-pages", type=int, default=8, help="pages fetched per company")
+    parser.add_argument("--country-ceiling", type=float, default=0.25)
+    parser.add_argument(
+        "--overfetch",
+        type=float,
+        default=3.0,
+        help="stop harvesting once target*overfetch email-bearing leads are banked",
+    )
+    parser.add_argument("--no-smtp", action="store_true", help="skip catch-all probing")
+    parser.add_argument(
+        "--select-only", action="store_true", help="skip harvesting, re-cut the existing checkpoint"
+    )
+    parser.add_argument("-v", "--verbose", action="store_true")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
+    config = load_config(resolve_config_path(args.config))
+    checkpoint = Checkpoint(args.checkpoint)
+
+    try:
+        if not args.select_only:
+            http = _build_http(config)
+            try:
+                listings = _collect_listings(config, http)
+                log.info("seed: %d listings across %d targets", len(listings), len(config.targets))
+                companies = companies_from_listings(listings, http)
+                log.info("seed: %d unique companies with a resolved own-domain", len(companies))
+                funnel = process_companies(
+                    companies,
+                    http,
+                    checkpoint,
+                    concurrency=args.concurrency,
+                    smtp=not args.no_smtp,
+                    max_pages=args.max_pages,
+                    stop_after=int(args.target * args.overfetch) if args.overfetch else None,
+                )
+                log.info("funnel: %s", dict(funnel))
+            finally:
+                http.close()
+
+        leads, report = select(
+            checkpoint.all_leads(), target=args.target, country_ceiling=args.country_ceiling
+        )
+        write_csv(leads, args.output)
+    finally:
+        checkpoint.close()
+
+    print()
+    print(report.summary())
+    print(f"\nwrote {len(leads)} rows to {Path(args.output).resolve()}")
+    if report.shortfall:
+        print(f"\nSHORTFALL: {report.shortfall} rows short of {args.target}.")
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
