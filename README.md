@@ -1,6 +1,6 @@
 # HarvestKit
 
-> Universal scraper — works on **any website** (job boards, business directories, listings). Python CLI + Chrome extension share the same 60-field schema.
+> Universal scraper — works on **any website** (job boards, business directories, listings). Python CLI + Chrome extension share one schema and one `id` algorithm.
 
 [![CI](https://github.com/BluOryn/HarvestKit/actions/workflows/ci.yml/badge.svg)](https://github.com/BluOryn/HarvestKit/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/BluOryn/HarvestKit/actions/workflows/codeql.yml/badge.svg)](https://github.com/BluOryn/HarvestKit/actions/workflows/codeql.yml)
@@ -87,18 +87,27 @@ run:
 ### 5. Run
 
 ```bash
-# Scrape using a config file
-python run.py --config config.example.yaml
+# Scrape using a bundled config (see configs/)
+python run.py --config example
+
+# Bare names resolve under configs/, configs/regions/ and configs/sites/
+python run.py --config norway-big
+python run.py --config jobsch
 
 # Scrape ad-hoc URLs (adapter auto-detected by hostname)
 python run.py --urls https://boards.greenhouse.io/example https://anyrandomsite.com/jobs
 
 # Skip deep-scrape (faster, fewer fields)
-python run.py --config config.example.yaml --no-deep-scrape
+python run.py --config example --no-deep-scrape
 
 # Force fresh fetch (ignore cache)
-python run.py --config config.example.yaml --no-cache
+python run.py --config example --no-cache
+
+# Override the CSV destination
+python run.py --config example -o output/today.csv
 ```
+
+Run `make configs` to list every bundled config.
 
 Output → `output/jobs.csv` (or whatever `exports.csv.path` says).
 
@@ -122,7 +131,7 @@ Output → `output/jobs.csv` (or whatever `exports.csv.path` says).
 
 - ❌ Write adapter code for new sites — LLM-fallback handles it
 - ❌ Hand-craft CSS selectors — auto-learned and cached
-- ❌ Configure 60 fields per site — schema is shared
+- ❌ Configure fields per site — schema is shared
 - ❌ Handle pagination — universal anchor-cluster detector finds next-page links
 - ❌ Worry about rate-limits — per-host token bucket throttles automatically
 - ❌ Manage WAF retries — auto-backoff on 403/captcha
@@ -134,7 +143,7 @@ Output → `output/jobs.csv` (or whatever `exports.csv.path` says).
 ```yaml
 run:
   # ---- Identity ----
-  user_agent: "HarvestKitBot/1.0 (+hriday.vig@bluoryn.com)"
+  user_agent: "HarvestKitBot/1.0 (+https://github.com/BluOryn/HarvestKit)"
   rotate_user_agents: true       # rotate Chrome/Firefox/Safari pool
   obey_robots: false              # respect robots.txt; set true if required
   confirm_permission: true        # required to run — acknowledge you have permission
@@ -159,6 +168,7 @@ run:
   proxies:
     - "http://user:pass@host:port"
     - "socks5://host:port"
+  proxies_file: ""                 # newline-delimited file, merged with the list above
   proxy_rotation: round_robin     # or "random"
   proxy_max_failures: 3
   proxy_cooldown_seconds: 300
@@ -244,7 +254,7 @@ The extension runs in your real browser, so it bypasses DataDome / Cloudflare / 
 
 ---
 
-## Shared 60-field schema
+## Shared schema
 
 ```text
 title, company, company_logo, company_size, company_industry, company_website,
@@ -261,7 +271,7 @@ apply_url, job_url, external_id, requisition_id,
 source_ats, source_domain, raw_jsonld, confidence, scraped_at, extras_json
 ```
 
-`extras_json` catches anything outside the 60 fields — site-specific labels stash here automatically (e.g. `nav_arbeidstid`, `karrierestart_tiltredelse`).
+`extras_json` catches anything outside the schema fields — site-specific labels stash here automatically (e.g. `nav_arbeidstid`, `karrierestart_tiltredelse`).
 
 General-mode schema (32 fields): `name, category, subcategories, description, address, street_address, city, region, country, postal_code, latitude, longitude, phone, email, website, social_links, rating, review_count, price_range, hours, image, tags, amenities, menu_url, reservation_url, is_claimed, external_id, source_url, source_listing_url, source_domain, raw_jsonld, scraped_at`.
 
@@ -327,10 +337,16 @@ src/general_scraper/     General-mode (businesses, places)
 extension/               Chrome MV3 extension (TypeScript + React)
   app/src/content/       Per-page extractor + site adapters
   app/src/background/    Service worker + bulk crawl orchestrator
+  app/src/lib/           Shared schema, fingerprint, CSV export
   app/src/sidepanel/     React UI (dashboard, library, runs, settings)
-config.example.yaml      Default job-mode config
-config.general.example.yaml  General-mode (Yelp template)
-config.norway-big.yaml   Norway IT — 87 targets fan-out
+  tests/                 node --test suite (runs against app/src)
+configs/                 All YAML configs (see configs/README.md)
+  example.yaml           Default job-mode config
+  general.example.yaml   General-mode (Yelp template)
+  regions/               Multi-target country fan-outs (germany, norway-*)
+  sites/                 Single-site smoke configs (finn, jobsch, nav, …)
+tests/                   pytest suite (no network)
+tools/                   Cache salvage + proxy fetcher
 run.py                   Entry — dispatches jobs/general by mode
 ```
 
@@ -340,13 +356,16 @@ run.py                   Entry — dispatches jobs/general by mode
 
 ```bash
 # Python
-pip install -r requirements.txt
-python -m pytest
+pip install -e ".[dev]"
+make check                 # ruff + black + mypy + pytest
 
-# Extension watch + reload
-cd extension && node build.mjs --watch
-# Then click reload icon on chrome://extensions/ after each rebuild
+# Extension
+cd extension && npm ci
+npm run typecheck && npm test && npm run build
+npm run watch              # rebuild on change; then hit reload on chrome://extensions/
 ```
+
+`make configs` lists the bundled configs; `make smoke` runs a one-page scrape.
 
 ---
 

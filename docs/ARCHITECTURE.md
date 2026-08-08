@@ -1,6 +1,6 @@
 # Architecture
 
-HarvestKit ships two products that share the same 60-field `JobListing` schema:
+HarvestKit ships two products that share the same 56-field `JobListing` schema:
 
 1. **Python CLI engine** (`src/job_scraper/`) — runs headless, scheduled, in CI / containers.
 2. **Chrome MV3 extension** (`extension/`) — runs in the user's real browser, uses the same field schema and most of the same extraction rules ported to TypeScript.
@@ -73,14 +73,16 @@ Each strategy runs in sequence; later ones only fill what earlier ones missed. T
 | `src/job_scraper/universal.py` | Smart-DOM extractor + HR contact miner + site-specific hooks (NAV `<dl>`, NAV `__next_f` adData, KS `.fact-card`, jobbsafari `__NEXT_DATA__`). |
 | `src/job_scraper/deep_scrape.py` | Per-listing pipeline orchestrator. Throttle + retries + Playwright re-fetch + LLM-fallback hook. |
 | `src/job_scraper/llm_adapter.py` | Anthropic Haiku integration. Condenses HTML, asks for selector map, caches per host in SQLite, tracks monthly budget. |
-| `src/job_scraper/models.py` | `JobListing` dataclass (60 fields + `extras` dict). `merge()`, CSV column order, JSON ser/de. |
+| `src/job_scraper/models.py` | `JobListing` dataclass (56 fields + `extras` dict). `merge()`, CSV column order, JSON ser/de. |
 | `src/job_scraper/normalize.py` | URL canonicalization, junk-path filtering. |
 | `src/job_scraper/adapters/*.py` | One file per source. Each implements `fetch_jobs(target, run_config, http) → List[JobListing]`. |
-| `src/job_scraper/exports.py` | CSV / JSON / Google Sheets / Notion / Slack writers. |
+| `src/job_scraper/export/` | CSV / Google Sheets / Notion / Slack writers. `run_exports()` isolates each sink's failures. |
+| `src/job_scraper/safe_xml.py` | Hardened XML parsing for untrusted sitemaps and feeds. |
+| `src/job_scraper/config.py` | Strict YAML loader + `configs/` path resolver (`--config norway-big`). |
 
 ---
 
-## Shared schema (60 fields + extras)
+## Shared schema (56 fields + extras)
 
 The `JobListing` dataclass is the contract between CLI and extension. Adding a field requires:
 
