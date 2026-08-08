@@ -1,4 +1,4 @@
-from typing import List
+import logging
 
 from ..config import ExportsConfig
 from ..models import JobListing
@@ -7,13 +7,27 @@ from .gsheets_exporter import export_gsheets
 from .notion_exporter import export_notion
 from .slack_exporter import export_slack
 
+__all__ = ["export_csv", "export_gsheets", "export_notion", "export_slack", "run_exports"]
 
-def run_exports(jobs: List[JobListing], exports: ExportsConfig) -> None:
-    if exports.csv.enabled:
-        export_csv(jobs, exports.csv)
-    if exports.gsheets.enabled:
-        export_gsheets(jobs, exports.gsheets)
-    if exports.notion.enabled:
-        export_notion(jobs, exports.notion)
-    if exports.slack.enabled:
-        export_slack(jobs, exports.slack)
+
+def run_exports(jobs: list[JobListing], exports: ExportsConfig) -> None:
+    """Run every enabled exporter.
+
+    One failing destination must not lose the others: a Notion token that
+    expired should still leave you with the CSV. CSV runs first for that reason.
+    """
+    targets = (
+        ("csv", exports.csv, export_csv),
+        ("gsheets", exports.gsheets, export_gsheets),
+        ("notion", exports.notion, export_notion),
+        ("slack", exports.slack, export_slack),
+    )
+    for name, cfg, run in targets:
+        if not cfg.enabled:
+            continue
+        try:
+            run(jobs, cfg)
+        except Exception as exc:
+            logging.error(
+                "export %s failed: %s", name, exc, exc_info=logging.getLogger().isEnabledFor(logging.DEBUG)
+            )
