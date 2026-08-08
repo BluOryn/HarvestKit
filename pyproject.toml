@@ -28,6 +28,7 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "lxml>=5.2.0",
     "PyYAML>=6.0.1",
+    "defusedxml>=0.7.1",
     "tldextract>=5.1.2",
     "playwright>=1.45.0",
 ]
@@ -65,11 +66,21 @@ src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "C4"]
-ignore = ["E501", "B008", "N803", "N806"]
+ignore = [
+    "E501",   # line length — black owns wrapping
+    "B008",
+    "N803",
+    "N806",
+    "UP007",  # Optional[X] reads better than X | None in public signatures
+    "UP038",  # isinstance(x, (A, B)) is faster than isinstance(x, A | B)
+]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["B011"]
-"src/job_scraper/extract.py" = ["E741"]  # ambiguous variable names allowed in regex maps
+# Both bootstrap sys.path before importing the package, so imports cannot be
+# at the top of the file.
+"tools/**" = ["E402"]
+"run.py" = ["E402"]
 
 [tool.black]
 line-length = 110

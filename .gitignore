@@ -9,6 +9,8 @@ venv/
 env/
 *.egg-info/
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Cache + runtime
 .cache/
@@ -42,13 +44,18 @@ Thumbs.db
 service-account*.json
 credentials.json
 
-# Local config
+# Local config — keep credentials / internal URLs / proxy lists out of git.
+# Everything tracked lives under configs/ (see configs/README.md).
 config.local.yaml
 config.private.yaml
+configs/local/
+configs/**/*.local.yaml
+configs/**/*.private.yaml
 
-# Claude Code session files
+# Agent / tooling session files
 .claude/
 .serena/
+.veris/
 
 # Proxy lists (don't expose IPs publicly)
 proxies.txt
