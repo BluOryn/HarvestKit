@@ -9,26 +9,28 @@ Strategy stack (each contributes a partial JobListing; longer string wins on mer
 
 Public API:
   - extract_job_postings(html, url) — for backwards-compatibility with old call sites
-  - extract_job_from_page(html, url) — full single-job extraction with all 60 fields
+  - extract_job_from_page(html, url) — full single-job extraction across the whole schema
   - extract_apply_url_from_html(html, url) — apply-URL anchor scan
 """
+
 from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from collections.abc import Iterable
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
-from .models import JOB_FIELDS, JobListing
-
+from .models import JobListing
 
 # ---------------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------------
 
-def extract_job_postings(html: str, page_url: str) -> List[JobListing]:
+
+def extract_job_postings(html: str, page_url: str) -> list[JobListing]:
     """Backwards-compat: returns a list (possibly empty) of JobListing for a page.
 
     For multiple JobPosting blocks (rare; some sites embed several), returns each.
@@ -38,7 +40,7 @@ def extract_job_postings(html: str, page_url: str) -> List[JobListing]:
     jsonld_blocks = list(_iter_json_ld(soup))
     job_postings = [b for b in jsonld_blocks if _is_job_posting(b)]
 
-    listings: List[JobListing] = []
+    listings: list[JobListing] = []
     if job_postings:
         for ld in job_postings:
             listing = JobListing()
@@ -64,13 +66,13 @@ def extract_job_postings(html: str, page_url: str) -> List[JobListing]:
     return []
 
 
-def extract_job_from_page(html: str, page_url: str) -> Optional[JobListing]:
+def extract_job_from_page(html: str, page_url: str) -> JobListing | None:
     """Single-page extraction, merging all strategies. Returns None if nothing found."""
     listings = extract_job_postings(html, page_url)
     return listings[0] if listings else None
 
 
-def extract_apply_url_from_html(html: str, page_url: str) -> Optional[str]:
+def extract_apply_url_from_html(html: str, page_url: str) -> str | None:
     soup = BeautifulSoup(html, "lxml")
     return _find_apply_url(soup, page_url)
 
@@ -79,7 +81,8 @@ def extract_apply_url_from_html(html: str, page_url: str) -> Optional[str]:
 # JSON-LD
 # ---------------------------------------------------------------------------
 
-def _iter_json_ld(soup: BeautifulSoup) -> Iterable[Dict[str, Any]]:
+
+def _iter_json_ld(soup: BeautifulSoup) -> Iterable[dict[str, Any]]:
     for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
         text = script.string or script.get_text(strip=False)
         if not text:
@@ -111,7 +114,9 @@ def _flatten_json_ld(data: Any) -> Iterable[Any]:
         # Unwrap any single-key wrapper whose value looks like a Schema.org object.
         if len(data) == 1:
             only_val = next(iter(data.values()))
-            if isinstance(only_val, dict) and ("@type" in only_val or "@context" in only_val or "@graph" in only_val):
+            if isinstance(only_val, dict) and (
+                "@type" in only_val or "@context" in only_val or "@graph" in only_val
+            ):
                 yield from _flatten_json_ld(only_val)
                 return
         graph = data.get("@graph")
@@ -121,14 +126,14 @@ def _flatten_json_ld(data: Any) -> Iterable[Any]:
         yield data
 
 
-def _is_job_posting(item: Dict[str, Any]) -> bool:
+def _is_job_posting(item: dict[str, Any]) -> bool:
     t = item.get("@type")
     if isinstance(t, list):
         return any(str(x).lower() == "jobposting" for x in t)
     return str(t or "").lower() == "jobposting"
 
 
-def _apply_jsonld(j: JobListing, ld: Dict[str, Any]) -> None:
+def _apply_jsonld(j: JobListing, ld: dict[str, Any]) -> None:
     j.title = j.title or _str(ld.get("title") or ld.get("name"))
     raw_desc_html = ld.get("description") or ""
     j.description = j.description or _html_to_text(raw_desc_html)
@@ -175,7 +180,7 @@ def _apply_jsonld(j: JobListing, ld: Dict[str, Any]) -> None:
     locs = ld.get("jobLocation")
     if not isinstance(locs, list):
         locs = [locs] if locs else []
-    loc_strs: List[str] = []
+    loc_strs: list[str] = []
     for loc in locs:
         if not loc:
             continue
@@ -184,7 +189,12 @@ def _apply_jsonld(j: JobListing, ld: Dict[str, Any]) -> None:
             continue
         addr = loc.get("address") if isinstance(loc, dict) else None
         if isinstance(addr, dict):
-            parts = [addr.get("addressLocality"), addr.get("addressRegion"), addr.get("addressCountry"), addr.get("postalCode")]
+            parts = [
+                addr.get("addressLocality"),
+                addr.get("addressRegion"),
+                addr.get("addressCountry"),
+                addr.get("postalCode"),
+            ]
             country = addr.get("addressCountry")
             if isinstance(country, dict):
                 country = country.get("name")
@@ -275,7 +285,9 @@ def _apply_jsonld(j: JobListing, ld: Dict[str, Any]) -> None:
         j.department = j.department or _str(occ if not isinstance(occ, list) else ", ".join(map(str, occ)))
     ind = ld.get("industry")
     if ind:
-        j.company_industry = j.company_industry or _str(ind if not isinstance(ind, list) else ", ".join(map(str, ind)))
+        j.company_industry = j.company_industry or _str(
+            ind if not isinstance(ind, list) else ", ".join(map(str, ind))
+        )
 
     if not j.raw_jsonld:
         try:
@@ -285,7 +297,7 @@ def _apply_jsonld(j: JobListing, ld: Dict[str, Any]) -> None:
 
 
 # Section header regexes — broad coverage of EN/DE/FR/IT/NO.
-SECTION_PATTERNS: Dict[str, re.Pattern] = {
+SECTION_PATTERNS: dict[str, re.Pattern] = {
     "responsibilities": re.compile(
         r"\b("
         # EN
@@ -304,7 +316,9 @@ SECTION_PATTERNS: Dict[str, re.Pattern] = {
         r"hovedoppgaver|ansvarsomr(å|a)de|stillingen\s+innebærer|"
         r"sentrale\s+oppgaver|sentrale\s+arbeidsoppgaver|"
         r"i\s+denne\s+stillingen|du\s+vil|du\s+skal|du\s+kommer\s+til"
-        r")\b", re.I),
+        r")\w*\b",
+        re.I,
+    ),
     "requirements": re.compile(
         r"\b("
         # EN
@@ -326,7 +340,9 @@ SECTION_PATTERNS: Dict[str, re.Pattern] = {
         r"f(ø|o)lgende\s+kvalifikasjoner|kvalifikasjonskrav|"
         r"personlige\s+egenskaper|vi\s+ser\s+etter|kvalifikasjonene|"
         r"hvem\s+er\s+du"
-        r")\b", re.I),
+        r")\w*\b",
+        re.I,
+    ),
     "benefits": re.compile(
         r"\b("
         # EN
@@ -344,7 +360,9 @@ SECTION_PATTERNS: Dict[str, re.Pattern] = {
         r"vi\s+tilbyr|tilbyr|hva\s+(vi|tilbys)|"
         r"vi\s+kan\s+tilby|fordeler|h(ø|o)res\s+det\s+(ut|spennende)|"
         r"vil\s+du\s+v(æ|a)re\s+en\s+del|som\s+ansatt\s+hos"
-        r")\b", re.I),
+        r")\w*\b",
+        re.I,
+    ),
     "contact": re.compile(
         r"\b("
         r"contact|kontakt|deine\s+kontakte|haben\s+wir\s+(dein|ihr)\s+interesse|"
@@ -355,7 +373,9 @@ SECTION_PATTERNS: Dict[str, re.Pattern] = {
         r"kontaktperson|kontakt[\s-]?info|for\s+sp(ø|o)rsm(å|a)l|ved\s+sp(ø|o)rsm(å|a)l|"
         r"sp(ø|o)rsm(å|a)l\s+(om|kan)|tilf(ø|o)r\s+kontaktperson|"
         r"har\s+du\s+sp(ø|o)rsm(å|a)l|kontakt\s+oss"
-        r")\b", re.I),
+        r")\w*\b",
+        re.I,
+    ),
 }
 
 # Recruiter name patterns (EN/DE/FR/IT prefixes + bare First Last forms)
@@ -385,7 +405,13 @@ RECRUITER_TITLE_HINTS = re.compile(
 PHONE_INTL_RX = re.compile(r"\+\d{1,3}\s?\d{1,4}\s?\d{2,4}\s?\d{2,4}\s?\d{2,4}")
 
 
-def _parse_jd_sections(html: str) -> Dict[str, str]:
+# Shortest body we accept as a real section. A single terse bullet
+# ("Ship code", "Python") is legitimate; the old 20-char floor discarded those
+# and left responsibilities/requirements empty on concise postings.
+MIN_SECTION_CHARS = 8
+
+
+def _parse_jd_sections(html: str) -> dict[str, str]:
     """Parse a job-description HTML blob into structured sections.
 
     Walks the DOM looking for h1-h4/strong/b headings whose text matches the
@@ -394,7 +420,7 @@ def _parse_jd_sections(html: str) -> Dict[str, str]:
     layouts where the heading is wrapped in <strong> inside its own div.
     """
     soup = BeautifulSoup(html, "lxml")
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
     headings = soup.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "strong", "b"])
 
     for h in headings:
@@ -406,13 +432,12 @@ def _parse_jd_sections(html: str) -> Dict[str, str]:
                 continue
             block = _collect_section_body(h)
             body = _normalize(block)
-            if not body or len(body) < 20:
+            if len(body) < MIN_SECTION_CHARS:
                 continue
             if kind == "contact":
                 _extract_contact_info(block, out)
-            else:
-                if kind not in out or len(body) > len(out[kind]):
-                    out[kind] = body
+            elif kind not in out or len(body) > len(out[kind]):
+                out[kind] = body
             break
 
     # Education / experience / hiring manager — scan whole HTML body, not just sections
@@ -438,38 +463,30 @@ def _collect_section_body(heading: Any) -> str:
     """Walk forward from `heading` capturing sibling text until the next heading
     of equal/higher rank. Handles nested div containers where heading is wrapped.
     """
-    # Climb up to a reasonable container — the heading's parent <div> or <p>.
+    # Find the nearest ancestor (starting with the heading itself) that actually
+    # has following siblings. The previous version always started at the parent,
+    # so a top-level `<h3>` climbed all the way to the document node — and the
+    # fallback then scooped up every <p>/<li> on the page, including text that
+    # appeared *before* the heading.
     container = heading
-    for _ in range(3):
-        parent = getattr(container, "parent", None)
-        if parent is None:
+    for _ in range(4):
+        if any(getattr(s, "name", None) for s in container.find_next_siblings()):
             break
-        # If parent is the description root (multiple section siblings), stop.
-        sibs = [s for s in parent.find_next_siblings() if getattr(s, "name", None)]
-        if sibs:
-            container = parent
+        parent = getattr(container, "parent", None)
+        if parent is None or getattr(parent, "name", None) in (None, "[document]", "html"):
             break
         container = parent
 
-    buf: List[str] = []
-    found_self = False
+    buf: list[str] = []
     for sib in container.find_next_siblings():
         if not getattr(sib, "name", None):
             continue
-        # Stop on next heading-like sibling.
-        sib_headings = sib.find_all(["h1","h2","h3","h4","h5","h6","strong","b"])
-        if sib_headings:
-            # If the first heading inside is our text, skip.
-            first_text = sib_headings[0].get_text(" ", strip=True)
-            for rx in SECTION_PATTERNS.values():
-                if rx.search(first_text):
-                    return _normalize(" • ".join(buf)) if buf else ""
+        # Stop when the next section starts.
+        if _starts_new_section(sib):
+            break
         items = sib.find_all(["li", "p"])
         if items:
-            for it in items:
-                t = it.get_text(" ", strip=True)
-                if t:
-                    buf.append(t)
+            buf.extend(t for t in (it.get_text(" ", strip=True) for it in items) if t)
         else:
             t = sib.get_text(" ", strip=True)
             if t:
@@ -479,16 +496,35 @@ def _collect_section_body(heading: Any) -> str:
     if buf:
         return " • ".join(buf)
 
-    # Fallback: collect heading's parent block's body.
+    # Fallback: everything after the heading inside its immediate parent.
     parent = heading.parent
     if parent is not None:
-        items = parent.find_all(["li", "p"])
-        if items:
-            return " • ".join(it.get_text(" ", strip=True) for it in items if it.get_text(strip=True))
+        after = [
+            el for el in parent.find_all(["li", "p"]) if el.get_text(strip=True) and _is_after(heading, el)
+        ]
+        if after:
+            return " • ".join(el.get_text(" ", strip=True) for el in after)
     return ""
 
 
-def _extract_contact_info(html_or_text: str, out: Dict[str, str]) -> None:
+def _starts_new_section(node: Any) -> bool:
+    """True when `node` is (or opens with) a heading for a different section."""
+    if getattr(node, "name", None) in ("h1", "h2", "h3", "h4", "h5", "h6"):
+        text = node.get_text(" ", strip=True)
+        return any(rx.search(text) for rx in SECTION_PATTERNS.values())
+    headings = node.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "strong", "b"], limit=1)
+    if not headings:
+        return False
+    text = headings[0].get_text(" ", strip=True)
+    return bool(text) and any(rx.search(text) for rx in SECTION_PATTERNS.values())
+
+
+def _is_after(heading: Any, node: Any) -> bool:
+    """Document-order test: does `node` appear after `heading`?"""
+    return any(el is node for el in heading.next_elements)
+
+
+def _extract_contact_info(html_or_text: str, out: dict[str, str]) -> None:
     """From a 'Contact' section (string or HTML), pull recruiter name/title/email/phone."""
     text = _normalize(html_or_text)
 
@@ -522,7 +558,7 @@ def _extract_contact_info(html_or_text: str, out: Dict[str, str]) -> None:
 
     # 5. Email
     for cand in EMAIL_RX.findall(text):
-        if re.search(r"noreply|no-reply|example\.com|@sentry", cand, re.I):
+        if JUNK_EMAIL_RX.search(cand):
             continue
         out.setdefault("recruiter_email", cand)
         break
@@ -560,7 +596,7 @@ HIRING_MANAGER_RX = re.compile(
 )
 
 
-def _extract_education_experience(text: str, out: Dict[str, str]) -> None:
+def _extract_education_experience(text: str, out: dict[str, str]) -> None:
     if "education_required" not in out:
         m = EDUCATION_RX.search(text)
         if m:
@@ -578,7 +614,7 @@ def _extract_education_experience(text: str, out: Dict[str, str]) -> None:
             out["hiring_manager"] = _normalize(m.group(2))
 
 
-def _resolve_apply_action(ld: Dict[str, Any]) -> str:
+def _resolve_apply_action(ld: dict[str, Any]) -> str:
     pa = ld.get("potentialAction")
     if pa is None:
         if isinstance(ld.get("directApply"), str):
@@ -606,21 +642,23 @@ def _resolve_apply_action(ld: Dict[str, Any]) -> str:
 # Microdata
 # ---------------------------------------------------------------------------
 
+
 def _apply_microdata(j: JobListing, soup: BeautifulSoup) -> None:
     root = soup.find(attrs={"itemtype": re.compile(r"schema\.org/JobPosting", re.I)})
     if not root or not isinstance(root, Tag):
         return
+
     def get_prop(name: str) -> str:
         el = root.find(attrs={"itemprop": name})
         if not el:
             return ""
+        # bs4 returns a list for multi-valued attributes; _attr flattens it.
         if el.has_attr("content"):
-            return el["content"]
-        if el.name == "meta":
-            return el.get("content", "")
+            return _attr(el, "content")
         if el.name in ("a", "link"):
-            return el.get("href", "") or el.get_text(" ", strip=True)
+            return _attr(el, "href") or el.get_text(" ", strip=True)
         return el.get_text(" ", strip=True)
+
     j.title = j.title or get_prop("title")
     j.description = j.description or _html_to_text(get_prop("description"))
     j.employment_type = j.employment_type or get_prop("employmentType")
@@ -632,12 +670,12 @@ def _apply_microdata(j: JobListing, soup: BeautifulSoup) -> None:
 # OpenGraph
 # ---------------------------------------------------------------------------
 
+
 def _apply_opengraph(j: JobListing, soup: BeautifulSoup) -> None:
     def og(name: str) -> str:
         el = soup.find("meta", attrs={"property": name}) or soup.find("meta", attrs={"name": name})
-        if el and el.get("content"):
-            return el["content"].strip()
-        return ""
+        return _attr(el, "content") if el else ""
+
     j.title = j.title or og("og:title")
     j.description = j.description or og("og:description") or og("description")
     j.company_logo = j.company_logo or og("og:image")
@@ -649,79 +687,386 @@ def _apply_opengraph(j: JobListing, soup: BeautifulSoup) -> None:
 
 TECH_DICT = [
     # Languages
-    "python", "java", "kotlin", "scala", "golang", "rust", "c++", "c#", "typescript", "javascript",
-    "ruby", "php", "perl", "haskell", "elixir", "erlang", "lua", "dart", "matlab",
-    "objective-c", "swift", "groovy", "clojure", "f#", "vba", "powershell",
+    "python",
+    "java",
+    "kotlin",
+    "scala",
+    "golang",
+    "rust",
+    "c++",
+    "c#",
+    "typescript",
+    "javascript",
+    "ruby",
+    "php",
+    "perl",
+    "haskell",
+    "elixir",
+    "erlang",
+    "lua",
+    "dart",
+    "matlab",
+    "objective-c",
+    "swift",
+    "groovy",
+    "clojure",
+    "f#",
+    "vba",
+    "powershell",
     # Web frameworks
-    "react", "vue", "vue.js", "angular", "svelte", "sveltekit", "next.js", "nuxt", "nuxt.js",
-    "node.js", "express", "express.js", "nest.js", "nestjs", "fastapi", "django", "flask",
-    "spring", "spring boot", "spring framework", "rails", "ruby on rails", "laravel", "symfony",
-    "asp.net", ".net", "dotnet", "ember", "backbone", "remix", "astro", "qwik", "solid.js",
-    "redux", "mobx", "tailwind", "tailwindcss", "bootstrap", "material-ui", "mui", "chakra",
-    "styled-components", "css", "html", "sass", "scss", "less",
+    "react",
+    "vue",
+    "vue.js",
+    "angular",
+    "svelte",
+    "sveltekit",
+    "next.js",
+    "nuxt",
+    "nuxt.js",
+    "node.js",
+    "express",
+    "express.js",
+    "nest.js",
+    "nestjs",
+    "fastapi",
+    "django",
+    "flask",
+    "spring",
+    "spring boot",
+    "spring framework",
+    "rails",
+    "ruby on rails",
+    "laravel",
+    "symfony",
+    "asp.net",
+    ".net",
+    "dotnet",
+    "ember",
+    "backbone",
+    "remix",
+    "astro",
+    "qwik",
+    "solid.js",
+    "redux",
+    "mobx",
+    "tailwind",
+    "tailwindcss",
+    "bootstrap",
+    "material-ui",
+    "mui",
+    "chakra",
+    "styled-components",
+    "css",
+    "html",
+    "sass",
+    "scss",
+    "less",
     # Cloud / Infra
-    "aws", "gcp", "google cloud", "azure", "digitalocean", "heroku", "vercel", "netlify", "cloudflare",
-    "kubernetes", "k8s", "docker", "containerd", "podman", "openshift", "rancher",
-    "terraform", "ansible", "helm", "istio", "linkerd", "envoy", "consul", "vault", "nomad",
-    "pulumi", "cloudformation", "cdk", "serverless", "lambda", "cloud functions",
+    "aws",
+    "gcp",
+    "google cloud",
+    "azure",
+    "digitalocean",
+    "heroku",
+    "vercel",
+    "netlify",
+    "cloudflare",
+    "kubernetes",
+    "k8s",
+    "docker",
+    "containerd",
+    "podman",
+    "openshift",
+    "rancher",
+    "terraform",
+    "ansible",
+    "helm",
+    "istio",
+    "linkerd",
+    "envoy",
+    "consul",
+    "vault",
+    "nomad",
+    "pulumi",
+    "cloudformation",
+    "cdk",
+    "serverless",
+    "lambda",
+    "cloud functions",
     # Databases
-    "postgres", "postgresql", "mysql", "mariadb", "mongodb", "redis", "memcached",
-    "elasticsearch", "opensearch", "clickhouse", "snowflake", "bigquery", "redshift", "databricks",
-    "cassandra", "dynamodb", "couchdb", "couchbase", "neo4j", "arangodb", "scylladb",
-    "oracle", "ms sql", "sql server", "sqlite", "supabase", "firebase", "planetscale",
+    "postgres",
+    "postgresql",
+    "mysql",
+    "mariadb",
+    "mongodb",
+    "redis",
+    "memcached",
+    "elasticsearch",
+    "opensearch",
+    "clickhouse",
+    "snowflake",
+    "bigquery",
+    "redshift",
+    "databricks",
+    "cassandra",
+    "dynamodb",
+    "couchdb",
+    "couchbase",
+    "neo4j",
+    "arangodb",
+    "scylladb",
+    "oracle",
+    "ms sql",
+    "sql server",
+    "sqlite",
+    "supabase",
+    "firebase",
+    "planetscale",
     # Streaming / Big Data
-    "kafka", "rabbitmq", "spark", "airflow", "dbt", "flink", "hadoop", "hive", "presto", "trino",
-    "pulsar", "nats", "celery", "kinesis", "eventbridge",
+    "kafka",
+    "rabbitmq",
+    "spark",
+    "airflow",
+    "dbt",
+    "flink",
+    "hadoop",
+    "hive",
+    "presto",
+    "trino",
+    "pulsar",
+    "nats",
+    "celery",
+    "kinesis",
+    "eventbridge",
     # ML / AI
-    "tensorflow", "pytorch", "jax", "scikit-learn", "sklearn", "huggingface", "transformers",
-    "langchain", "llamaindex", "openai", "anthropic", "claude", "gemini", "llm", "rag",
-    "embeddings", "vector db", "pinecone", "weaviate", "chroma", "qdrant", "milvus", "faiss",
-    "numpy", "pandas", "matplotlib", "seaborn", "plotly", "jupyter", "mlflow", "kubeflow",
-    "fastai", "xgboost", "lightgbm", "catboost", "spacy", "nltk", "opencv", "yolo",
+    "tensorflow",
+    "pytorch",
+    "jax",
+    "scikit-learn",
+    "sklearn",
+    "huggingface",
+    "transformers",
+    "langchain",
+    "llamaindex",
+    "openai",
+    "anthropic",
+    "claude",
+    "gemini",
+    "llm",
+    "rag",
+    "embeddings",
+    "vector db",
+    "pinecone",
+    "weaviate",
+    "chroma",
+    "qdrant",
+    "milvus",
+    "faiss",
+    "numpy",
+    "pandas",
+    "matplotlib",
+    "seaborn",
+    "plotly",
+    "jupyter",
+    "mlflow",
+    "kubeflow",
+    "fastai",
+    "xgboost",
+    "lightgbm",
+    "catboost",
+    "spacy",
+    "nltk",
+    "opencv",
+    "yolo",
     # APIs / Protocols
-    "graphql", "rest", "grpc", "openapi", "swagger", "soap", "websocket", "webrtc",
-    "oauth", "oidc", "saml", "jwt", "openid",
+    "graphql",
+    "rest",
+    "grpc",
+    "openapi",
+    "swagger",
+    "soap",
+    "websocket",
+    "webrtc",
+    "oauth",
+    "oidc",
+    "saml",
+    "jwt",
+    "openid",
     # CI/CD / DevOps
-    "ci/cd", "jenkins", "github actions", "gitlab ci", "circleci", "argocd", "flux",
-    "azure devops", "bamboo", "teamcity", "drone", "tekton", "spinnaker",
-    "linux", "bash", "zsh", "make", "cmake", "gradle", "maven", "npm", "yarn", "pnpm",
+    "ci/cd",
+    "jenkins",
+    "github actions",
+    "gitlab ci",
+    "circleci",
+    "argocd",
+    "flux",
+    "azure devops",
+    "bamboo",
+    "teamcity",
+    "drone",
+    "tekton",
+    "spinnaker",
+    "linux",
+    "bash",
+    "zsh",
+    "make",
+    "cmake",
+    "gradle",
+    "maven",
+    "npm",
+    "yarn",
+    "pnpm",
     # Mobile
-    "ios", "android", "jetpack compose", "flutter", "react native", "swiftui", "xamarin",
-    "ionic", "cordova", "capacitor", "kmm", "kotlin multiplatform",
+    "ios",
+    "android",
+    "jetpack compose",
+    "flutter",
+    "react native",
+    "swiftui",
+    "xamarin",
+    "ionic",
+    "cordova",
+    "capacitor",
+    "kmm",
+    "kotlin multiplatform",
     # Enterprise
-    "salesforce", "sap", "sap s/4hana", "servicenow", "oracle", "workday", "dynamics 365",
-    "microsoft 365", "sharepoint", "office 365",
+    "salesforce",
+    "sap",
+    "sap s/4hana",
+    "servicenow",
+    "oracle",
+    "workday",
+    "dynamics 365",
+    "microsoft 365",
+    "sharepoint",
+    "office 365",
     # Observability / SRE
-    "datadog", "new relic", "grafana", "prometheus", "sentry", "splunk", "elk", "loki",
-    "jaeger", "opentelemetry", "honeycomb", "lightstep", "pagerduty", "opsgenie",
+    "datadog",
+    "new relic",
+    "grafana",
+    "prometheus",
+    "sentry",
+    "splunk",
+    "elk",
+    "loki",
+    "jaeger",
+    "opentelemetry",
+    "honeycomb",
+    "lightstep",
+    "pagerduty",
+    "opsgenie",
     # Analytics / BI
-    "tableau", "power bi", "looker", "metabase", "mixpanel", "amplitude", "segment",
-    "snowplow", "rudderstack", "fivetran", "airbyte", "stitch",
+    "tableau",
+    "power bi",
+    "looker",
+    "metabase",
+    "mixpanel",
+    "amplitude",
+    "segment",
+    "snowplow",
+    "rudderstack",
+    "fivetran",
+    "airbyte",
+    "stitch",
     # Security
-    "owasp", "burp suite", "nessus", "metasploit", "wireshark", "snort", "splunk",
-    "kali", "active directory", "ldap", "kerberos", "siem", "soc", "ids", "ips",
-    "iso 27001", "soc 2", "pci dss", "gdpr",
+    "owasp",
+    "burp suite",
+    "nessus",
+    "metasploit",
+    "wireshark",
+    "snort",
+    "splunk",
+    "kali",
+    "active directory",
+    "ldap",
+    "kerberos",
+    "siem",
+    "soc",
+    "ids",
+    "ips",
+    "iso 27001",
+    "soc 2",
+    "pci dss",
+    "gdpr",
     # QA / Testing
-    "selenium", "cypress", "playwright", "puppeteer", "jest", "mocha", "vitest", "junit",
-    "testng", "pytest", "rspec", "cucumber", "appium", "espresso", "xctest", "robotframework",
+    "selenium",
+    "cypress",
+    "playwright",
+    "puppeteer",
+    "jest",
+    "mocha",
+    "vitest",
+    "junit",
+    "testng",
+    "pytest",
+    "rspec",
+    "cucumber",
+    "appium",
+    "espresso",
+    "xctest",
+    "robotframework",
     # Methodologies (skills)
-    "agile", "scrum", "kanban", "lean", "tdd", "bdd", "ddd", "microservices", "monolith",
-    "event-driven", "soa", "ci", "cd", "iac", "gitops", "devsecops", "mlops",
+    "agile",
+    "scrum",
+    "kanban",
+    "lean",
+    "tdd",
+    "bdd",
+    "ddd",
+    "microservices",
+    "monolith",
+    "event-driven",
+    "soa",
+    "ci",
+    "cd",
+    "iac",
+    "gitops",
+    "devsecops",
+    "mlops",
     # CMS / E-commerce
-    "wordpress", "drupal", "joomla", "magento", "shopify", "woocommerce", "contentful",
-    "strapi", "sanity", "prismic", "umbraco",
+    "wordpress",
+    "drupal",
+    "joomla",
+    "magento",
+    "shopify",
+    "woocommerce",
+    "contentful",
+    "strapi",
+    "sanity",
+    "prismic",
+    "umbraco",
     # Misc / Tools
-    "git", "github", "gitlab", "bitbucket", "jira", "confluence", "notion", "slack",
-    "figma", "sketch", "miro", "lucidchart", "draw.io",
+    "git",
+    "github",
+    "gitlab",
+    "bitbucket",
+    "jira",
+    "confluence",
+    "notion",
+    "slack",
+    "figma",
+    "sketch",
+    "miro",
+    "lucidchart",
+    "draw.io",
 ]
 
 SENIORITY = [
     ("principal", re.compile(r"\bprincipal\b", re.I)),
     ("staff", re.compile(r"\bstaff\b", re.I)),
-    ("senior", re.compile(r"\bsenior(?:r[åa]dgiver|utvikler|konsulent|ingeni[øo]r|arkitekt)?\b|\bsr\.?\b|seniorrådgiver|seniorutvikler", re.I)),
+    (
+        "senior",
+        re.compile(
+            r"\bsenior(?:r[åa]dgiver|utvikler|konsulent|ingeni[øo]r|arkitekt)?\b|\bsr\.?\b|seniorrådgiver|seniorutvikler",
+            re.I,
+        ),
+    ),
     ("lead", re.compile(r"\blead\b|\btech\s+lead\b|\bteam\s+lead\b|\bteamleder\b|\bleder\b", re.I)),
     ("mid", re.compile(r"\bmid[-\s]?level\b", re.I)),
-    ("junior", re.compile(r"\bjunior\b|\bjr\.?\b|\bgraduate\b|\bentry[-\s]?level\b|nyutdannet|trainee", re.I)),
+    (
+        "junior",
+        re.compile(r"\bjunior\b|\bjr\.?\b|\bgraduate\b|\bentry[-\s]?level\b|nyutdannet|trainee", re.I),
+    ),
     ("intern", re.compile(r"\bintern\b|\bpraktikum\b|\bwerkstudent\b|\bpraktikant\b", re.I)),
     ("director", re.compile(r"\bdirector\b|\bdirekt[øo]r\b", re.I)),
     ("head", re.compile(r"\bhead\s+of\b|\bvp\b|\bcto\b|\bsjef\b", re.I)),
@@ -747,9 +1092,29 @@ SALARY_RX = re.compile(
     re.I,
 )
 EMAIL_RX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-PHONE_RX = re.compile(r"(?:\+\d{1,3}[\s.-]?)?(?:\(\d{1,4}\)[\s.-]?)?\d{2,4}[\s.-]?\d{2,4}[\s.-]?\d{2,4}")
+# 2-5 digit groups after the optional country/area code. Three groups was too
+# few for Norwegian (95 83 21 97) and Swiss (44 215 15 78) numbers — they came
+# out truncated, e.g. "+47 95 83 21" losing the final pair.
+PHONE_RX = re.compile(r"(?:\+\d{1,3}[\s.\-]?)?(?:\(\d{1,4}\)[\s.\-]?)?\d{2,4}(?:[\s.\-]?\d{2,4}){1,4}")
+DATE_LIKE_RX = re.compile(r"^\d{1,4}[./\-]\d{1,4}[./\-]\d{2,4}$")
+JUNK_EMAIL_RX = re.compile(r"noreply|no-reply|donotreply|example\.com|@sentry|\.png$|\.jpg$", re.I)
+RECRUITER_EMAIL_RX = re.compile(r"jobs?|career|talent|recruit|hr|hiring|people|personal", re.I)
 
-REMOTE_RX = re.compile(r"\b(remote|home\s?office|work\s+from\s+home|fully\s+remote|telecommut|distributed)\b", re.I)
+# Single alternation over the whole dictionary. Scanning 200 KB of text once per
+# term (330 terms) cost ~66 MB of regex work per page; one pass costs ~200 KB.
+# Longest-first so "spring boot" wins over "spring" and "vue.js" over "vue".
+_TECH_LOOKUP = {t.lower(): t for t in TECH_DICT}
+TECH_DICT_KEYS = list(dict.fromkeys(t.lower() for t in TECH_DICT))
+TECH_RX = re.compile(
+    r"(?<![a-z0-9+#.])(?:"
+    + "|".join(re.escape(t) for t in sorted(_TECH_LOOKUP, key=len, reverse=True))
+    + r")(?![a-z0-9])",
+    re.I,
+)
+
+REMOTE_RX = re.compile(
+    r"\b(remote|home\s?office|work\s+from\s+home|fully\s+remote|telecommut|distributed)\b", re.I
+)
 HYBRID_RX = re.compile(r"\b(hybrid|flex(?:ible)?\s+location)\b", re.I)
 ONSITE_RX = re.compile(r"\b(on[-\s]?site|in[-\s]?office|vor\s+ort)\b", re.I)
 VISA_RX = re.compile(r"\b(visa\s+sponsorship|sponsor\s+(?:your)?\s?visa|h-?1b|blue\s+card)\b", re.I)
@@ -757,18 +1122,25 @@ RELOC_RX = re.compile(r"relocation\s+(?:support|assistance|package|paid|covered|
 EQUITY_RX = re.compile(r"\b(equity|stock\s+options?|rsu|esop|share\s+options?)\b", re.I)
 
 
+def _detect_tech(text: str) -> list[str]:
+    """Return canonical tech-dictionary hits found in `text`, in dictionary order."""
+    hits = {m.group(0).lower() for m in TECH_RX.finditer(text)}
+    return [_TECH_LOOKUP[t] for t in TECH_DICT_KEYS if t in hits]
+
+
 def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
     body = soup.find("body") or soup
-    text = body.get_text(" ", strip=True)[:200000]
-    lower = text.lower()
+    page_text = body.get_text(" ", strip=True)
 
-    techs: List[str] = []
-    for t in TECH_DICT:
-        escaped = re.escape(t)
-        if re.search(rf"(^|[^a-z0-9]){escaped}([^a-z0-9]|$)", lower):
-            techs.append(t)
+    # Include the structured description. On ATS pages the entire job body lives
+    # in the JSON-LD `description` and never appears in the DOM, so scanning the
+    # DOM alone missed the tech stack, salary and seniority for those postings.
+    text = page_text if not j.description else f"{page_text} {j.description}"
+    text = text[:200000]
+
+    techs = _detect_tech(text)
     if techs and not j.tech_stack:
-        j.tech_stack = ", ".join(_uniq(techs))
+        j.tech_stack = ", ".join(techs)
 
     if not j.seniority:
         for name, rx in SENIORITY:
@@ -820,22 +1192,18 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
     if EQUITY_RX.search(text) and not j.equity:
         j.equity = "yes"
 
-    emails = _uniq([e for e in EMAIL_RX.findall(text) if not re.search(r"noreply|no-reply|example\.com", e, re.I)])
+    emails = _uniq([e for e in EMAIL_RX.findall(text) if not JUNK_EMAIL_RX.search(e)])
     if emails:
-        recruiter = next((e for e in emails if re.search(r"jobs?|career|talent|recruit|hr|hiring|people", e, re.I)), "")
+        recruiter = next((e for e in emails if RECRUITER_EMAIL_RX.search(e)), "")
         if recruiter and not j.recruiter_email:
             j.recruiter_email = recruiter
         if not j.application_email:
             j.application_email = recruiter or emails[0]
-    # Filter:
-    #  - require at least 8 digits
-    #  - reject 9-12 raw digit blobs with no separators (likely IDs, e.g. finnkode)
     # Reject:
-    #  - <8 or >15 digits
+    #  - <8 or >15 digits (E.164 bounds)
     #  - 9-12 raw digits with no separator (likely an ID, e.g. finnkode 462751961)
     #  - date-like strings (DD.MM.YYYY / DD/MM/YYYY / YYYY-MM-DD)
-    DATE_LIKE_RX = re.compile(r"^\d{1,4}[\./\-]\d{1,4}[\./\-]\d{2,4}$")
-    phones_filt: List[str] = []
+    phones_filt: list[str] = []
     for p in PHONE_RX.findall(text):
         p_stripped = p.strip()
         digits = re.sub(r"\D", "", p_stripped)
@@ -850,9 +1218,19 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
     if phones and not j.application_phone:
         j.application_phone = phones[0]
 
-    j.responsibilities = j.responsibilities or _section_text(soup, re.compile(r"responsibilit|aufgaben|what\s+you'?ll\s+do|deine\s+aufgaben|tasks", re.I))
-    j.requirements = j.requirements or _section_text(soup, re.compile(r"requirement|qualific|profil|what\s+you'?ll\s+need|dein\s+profil|skills?\s*we|must[-\s]?have", re.I))
-    j.benefits = j.benefits or _section_text(soup, re.compile(r"benefits?|perks|wir\s+bieten|what\s+we\s+offer|deine\s+vorteile", re.I))
+    j.responsibilities = j.responsibilities or _section_text(
+        soup, re.compile(r"responsibilit|aufgaben|what\s+you'?ll\s+do|deine\s+aufgaben|tasks", re.I)
+    )
+    j.requirements = j.requirements or _section_text(
+        soup,
+        re.compile(
+            r"requirement|qualific|profil|what\s+you'?ll\s+need|dein\s+profil|skills?\s*we|must[-\s]?have",
+            re.I,
+        ),
+    )
+    j.benefits = j.benefits or _section_text(
+        soup, re.compile(r"benefits?|perks|wir\s+bieten|what\s+we\s+offer|deine\s+vorteile", re.I)
+    )
     if not j.qualifications:
         j.qualifications = j.requirements
 
@@ -875,11 +1253,14 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
 
     # Education / experience / hiring manager — fallback regex on full body if not set yet
     if not (j.education_required and j.experience_years and j.hiring_manager):
-        body_text = (soup.find("body") or soup).get_text(" ", strip=True)[:50000]
-        tmp: Dict[str, str] = {}
-        if j.education_required: tmp["education_required"] = j.education_required
-        if j.experience_years: tmp["experience_years"] = j.experience_years
-        if j.hiring_manager: tmp["hiring_manager"] = j.hiring_manager
+        body_text = text[:50000]
+        tmp: dict[str, str] = {}
+        if j.education_required:
+            tmp["education_required"] = j.education_required
+        if j.experience_years:
+            tmp["experience_years"] = j.experience_years
+        if j.hiring_manager:
+            tmp["hiring_manager"] = j.hiring_manager
         _extract_education_experience(body_text, tmp)
         if tmp.get("education_required") and not j.education_required:
             j.education_required = tmp["education_required"]
@@ -895,7 +1276,7 @@ def _section_text(soup: BeautifulSoup, header_rx: re.Pattern) -> str:
     for h in headings:
         if not header_rx.search(h.get_text(" ", strip=True) or ""):
             continue
-        buf: List[str] = []
+        buf: list[str] = []
         n = h.next_sibling
         while n is not None:
             if hasattr(n, "name") and n.name and n.name.lower() in stop:
@@ -920,7 +1301,10 @@ def _section_text(soup: BeautifulSoup, header_rx: re.Pattern) -> str:
 # Recruiter
 # ---------------------------------------------------------------------------
 
-RECRUITER_TITLE_RX = re.compile(r"(recruiter|talent\s+(?:acquisition|partner|manager)|hr\s+manager|people\s+(?:partner|operations)|hiring\s+manager|sourcer)", re.I)
+RECRUITER_TITLE_RX = re.compile(
+    r"(recruiter|talent\s+(?:acquisition|partner|manager)|hr\s+manager|people\s+(?:partner|operations)|hiring\s+manager|sourcer)",
+    re.I,
+)
 PERSON_NAME_RX = re.compile(r"\b([A-ZÄÖÜ][a-zäöüß]+(?:[\s-][A-ZÄÖÜ][a-zäöüß]+){1,3})\b")
 LINKEDIN_RX = re.compile(r"https?://(?:[a-z]+\.)?linkedin\.com/in/[A-Za-z0-9-_%]+", re.I)
 
@@ -931,12 +1315,14 @@ def _apply_recruiter(j: JobListing, soup: BeautifulSoup) -> None:
         text = el.get_text(" ", strip=True)
         if len(text) > 1000:
             text = text[:1000]
-        if not RECRUITER_TITLE_RX.search(text):
-            continue
         m = RECRUITER_TITLE_RX.search(text)
-        if m and not j.recruiter_title:
+        if not m:
+            continue
+        if not j.recruiter_title:
             j.recruiter_title = m.group(0)
-        stripped = re.sub(r"^(your|our|meet)\s+(talent|recruiting|hiring)\s+(partner|team|contact)", "", text, flags=re.I)
+        stripped = re.sub(
+            r"^(your|our|meet)\s+(talent|recruiting|hiring)\s+(partner|team|contact)", "", text, flags=re.I
+        )
         stripped = RECRUITER_TITLE_RX.sub("", stripped)
         nm = PERSON_NAME_RX.search(stripped)
         if nm and not j.recruiter_name:
@@ -970,8 +1356,24 @@ APPLY_HOST_RX = re.compile(
     r"ashbyhq\.com|teamtailor\.com|recruitee\.com|personio\.|bamboohr\.com|jobvite\.com)",
     re.I,
 )
-APPLY_TEXT_RX = re.compile(r"^(apply|apply now|jetzt bewerben|bewerben|application|submit application|postuler|candidater)\b", re.I)
+APPLY_TEXT_RX = re.compile(
+    r"^(apply|apply now|jetzt bewerben|bewerben|application|submit application|postuler|candidater)\b", re.I
+)
 APPLY_PATH_RX = re.compile(r"/(apply|application|bewerb|postuler|candidat|submission)", re.I)
+
+# Below this the description is treated as a stub worth improving on.
+MIN_DESCRIPTION_CHARS = 50
+
+# Ordered narrowest-useful-first: semantic landmarks, then class-name guesses.
+DESCRIPTION_SELECTORS = (
+    "main",
+    "article",
+    "[role='main']",
+    "[class*='description']",
+    "[class*='job-detail']",
+    "[class*='posting']",
+    "[class*='vacancy']",
+)
 
 
 def _is_junk_url(u: str) -> bool:
@@ -979,29 +1381,32 @@ def _is_junk_url(u: str) -> bool:
         return True
     try:
         p = urlparse(u)
-        if p.path == "" or p.path == "/":
-            return True
-        if NON_JOB_PATH_RX.search(p.path):
-            return True
-        return False
-    except Exception:
+    except ValueError:
         return True
+    if p.scheme not in ("", "http", "https"):
+        return True
+    if p.path in ("", "/"):
+        return True
+    return bool(NON_JOB_PATH_RX.search(p.path))
 
 
-def _finalize(j: JobListing, html: str, page_url: str, soup: BeautifulSoup, ld: Optional[Dict[str, Any]]) -> None:
+def _finalize(
+    j: JobListing, html: str, page_url: str, soup: BeautifulSoup, ld: dict[str, Any] | None
+) -> None:
     parsed = urlparse(page_url)
     j.source_domain = j.source_domain or parsed.netloc
 
     # Canonical job URL: JSON-LD url > <link rel=canonical> > og:url > page_url
-    cands: List[str] = []
+    cands: list[str] = []
     if j.job_url:
         cands.append(j.job_url)
     canon = soup.find("link", rel=re.compile(r"^canonical$", re.I))
-    if canon and canon.get("href"):
-        cands.append(urljoin(page_url, canon.get("href")))
-    og = soup.find("meta", attrs={"property": "og:url"})
-    if og and og.get("content"):
-        cands.append(og["content"].strip())
+    canon_href = _attr(canon, "href")
+    if canon_href:
+        cands.append(urljoin(page_url, canon_href))
+    og_url = _attr(soup.find("meta", attrs={"property": "og:url"}), "content")
+    if og_url:
+        cands.append(og_url)
     cands.append(page_url)
     for c in cands:
         if c and not _is_junk_url(c):
@@ -1018,23 +1423,19 @@ def _finalize(j: JobListing, html: str, page_url: str, soup: BeautifulSoup, ld: 
     if not j.apply_url:
         j.apply_url = j.job_url
 
-    # Description fallback
-    if not j.description or len(j.description) < 50:
-        for sel in ["main", "article", "[role='main']"]:
+    # Description fallback. Scrape the DOM only when the structured description
+    # is missing or thin, and keep whichever is longer — a terse-but-real
+    # JSON-LD description should not be replaced by page chrome, and page text
+    # should not be discarded when JSON-LD gave us one short sentence.
+    if len(j.description) < MIN_DESCRIPTION_CHARS:
+        for sel in DESCRIPTION_SELECTORS:
             el = soup.select_one(sel)
-            if el:
-                txt = el.get_text(" ", strip=True)
-                if len(txt) > 50:
-                    j.description = txt[:10000]
-                    break
-        if not j.description or len(j.description) < 50:
-            for sel in ["[class*='description']", "[class*='job-detail']", "[class*='posting']", "[class*='vacancy']"]:
-                el = soup.select_one(sel)
-                if el:
-                    txt = el.get_text(" ", strip=True)
-                    if len(txt) > 50:
-                        j.description = txt[:10000]
-                        break
+            if el is None:
+                continue
+            txt = el.get_text(" ", strip=True)
+            if len(txt) > len(j.description) and len(txt) > MIN_DESCRIPTION_CHARS:
+                j.description = txt[:10000]
+                break
 
     # Title fallback
     if not j.title:
@@ -1071,6 +1472,7 @@ def _find_apply_url(soup: BeautifulSoup, page_url: str) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _normalize_amount(s: str) -> str:
     """Strip thousands separators (apostrophe, space, narrow-no-break-space, no-break-space,
     period) from a salary number. Keeps decimal point if it's clearly the cents separator
@@ -1096,6 +1498,23 @@ def _str(v: Any) -> str:
     return str(v).strip()
 
 
+def _attr(el: Any, name: str) -> str:
+    """Read an attribute as a string.
+
+    bs4 returns a *list* for multi-valued attributes (rel, class, and any
+    attribute on a tag it treats as multi-valued), so a bare `el[name].strip()`
+    raises AttributeError on those.
+    """
+    if el is None:
+        return ""
+    value = el.get(name)
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(v) for v in value).strip()
+    return str(value).strip()
+
+
 def _html_to_text(html_text: Any) -> str:
     if not html_text:
         return ""
@@ -1109,9 +1528,9 @@ def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
 
-def _uniq(seq: List[str]) -> List[str]:
+def _uniq(seq: list[str]) -> list[str]:
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for s in seq:
         s = (s or "").strip()
         if not s:
@@ -1131,8 +1550,30 @@ def _is_likely_job_page(page_url: str, soup: BeautifulSoup) -> bool:
     generic = {"careers", "jobs", "open positions", "openings", "job openings"}
     if h1_text in generic:
         return False
-    if any(tok in path for tok in ["/job", "/jobs", "/career", "/careers", "/positions", "/opening", "/vacanc", "/stellen", "/joboffer", "/detail/"]):
+    if any(
+        tok in path
+        for tok in [
+            "/job",
+            "/jobs",
+            "/career",
+            "/careers",
+            "/positions",
+            "/opening",
+            "/vacanc",
+            "/stellen",
+            "/joboffer",
+            "/detail/",
+        ]
+    ):
         return True
     text = soup.get_text(" ", strip=True).lower()
-    signals = ["apply", "responsibilities", "requirements", "qualifications", "bewerben", "aufgaben", "anforderung"]
+    signals = [
+        "apply",
+        "responsibilities",
+        "requirements",
+        "qualifications",
+        "bewerben",
+        "aufgaben",
+        "anforderung",
+    ]
     return sum(1 for s in signals if s in text) >= 2

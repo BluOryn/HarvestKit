@@ -15,17 +15,17 @@ It also exposes a `cluster_anchors` function: given a search/listing page,
 group anchors by URL pattern and return the largest cluster — these are
 your job detail URLs, regardless of site structure.
 """
+
 from __future__ import annotations
 
+import json
 import re
-from collections import Counter, defaultdict
-from typing import Dict, List, Optional, Tuple
+from collections import defaultdict
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
 from .models import JobListing
-
 
 # ---------------------------------------------------------------------------
 # Universal HR contact mining
@@ -34,7 +34,7 @@ from .models import JobListing
 # International phone formats — strict enough to avoid false positives.
 # E.164: +<country code 1-3 digits> followed by 6-13 more digits with optional separators.
 PHONE_RX = re.compile(
-    r"(?:\+(?:\d[\s\-\.\(\)]?){6,15}\d|"      # international with +country code
+    r"(?:\+(?:\d[\s\-\.\(\)]?){6,15}\d|"  # international with +country code
     r"\b(?:0\d{1,3}[\s\-\.\(\)/]?){2,5}\d{2,4}\b)"  # local with leading 0
 )
 # Norway-specific tighter regex (used for de-noising)
@@ -49,9 +49,7 @@ CONTACT_KEYWORDS = re.compile(
     re.I,
 )
 
-NAME_RX = re.compile(
-    r"\b([A-ZÆØÅÄÖÜ][a-zæøåäöüß'\-]{2,}(?:[\s\-][A-ZÆØÅÄÖÜ][a-zæøåäöüß'\-]{2,}){1,3})\b"
-)
+NAME_RX = re.compile(r"\b([A-ZÆØÅÄÖÜ][a-zæøåäöüß'\-]{2,}(?:[\s\-][A-ZÆØÅÄÖÜ][a-zæøåäöüß'\-]{2,}){1,3})\b")
 
 # Hosts/domains we don't trust for "company email"
 JUNK_EMAIL_HOSTS = re.compile(
@@ -68,8 +66,43 @@ ATS_HOSTS = re.compile(
     re.I,
 )
 
+# og:site_name on an aggregator names the platform, not the employer.
+AGGREGATOR_NAME_RX = re.compile(
+    r"(finn\.no|nav|arbeidsplassen|jobbnorge|linkedin|indeed|stepstone|"
+    r"jobbsafari|karrierestart|monster|glassdoor|thehub)",
+    re.I,
+)
 
-def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str, str]:
+#: Anchor text that means "this link starts an application".
+APPLY_ANCHOR_TEXTS = frozenset(
+    {
+        "apply",
+        "apply now",
+        "apply for this job",
+        "søk stillingen",
+        "søk her",
+        "søk",
+        "søk på stillingen",
+        "bewerben",
+        "jetzt bewerben",
+        "postuler",
+        "candidater",
+        "candidatura",
+    }
+)
+
+#: URL path fragments that hint an anchor cluster is a set of job details.
+JOB_HINT_RX = re.compile(r"(job|stilling|vacanc|career|posting|opening|ad|opportunit|trabajo)", re.I)
+
+#: jobbsafari "Om stillingen <X>" captures that are prose, not an employer name.
+JOBBSAFARI_EMPLOYER_REJECT_RX = re.compile(
+    r"^(Stillingen|The position|Beskrivelse|Description|Om|About|Vi|We|Du|You|"
+    r"Søknad|Søker|Application|This is just|Tasks|Oppgaver)\b",
+    re.I,
+)
+
+
+def mine_contacts(html: str, *, country_hint: str | None = None) -> dict[str, str]:
     """Pull every recruiter / HR / applicant contact field we can find.
 
     Returns a dict that may include:
@@ -78,10 +111,10 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
     """
     soup = BeautifulSoup(html, "lxml")
     body_text = soup.get_text(" ", strip=True)
-    out: Dict[str, str] = {}
+    out: dict[str, str] = {}
 
     # Email: all valid, drop junk hosts
-    emails: List[str] = []
+    emails: list[str] = []
     for em in EMAIL_RX.findall(html):
         if JUNK_EMAIL_HOSTS.search(em):
             continue
@@ -90,7 +123,11 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
     if emails:
         # Prefer recruiter-flavored emails
         recruiter = next(
-            (e for e in emails if re.search(r"(jobs?|career|talent|recruit|hr|hiring|people|personal)", e, re.I)),
+            (
+                e
+                for e in emails
+                if re.search(r"(jobs?|career|talent|recruit|hr|hiring|people|personal)", e, re.I)
+            ),
             "",
         )
         if recruiter:
@@ -98,7 +135,7 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
         out["application_email"] = recruiter or emails[0]
 
     # Phone: rely on country regex first, fall back to international
-    phones: List[str] = []
+    phones: list[str] = []
     if country_hint == "NO":
         phones = [_normalize_phone(p) for p in NO_PHONE_RX.findall(body_text)]
     if not phones:
@@ -117,15 +154,20 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
         # block). Two patterns:
         #   (a) "Kontaktperson for stillingen <Name> <Role>"
         #   (b) Bare:                       "<Name> <Role> +47 <phone>"
-        m = re.search(r"Kontaktperson(?:\s+for\s+stillingen)?\s+([^\d+@]{5,120}?)(?=\+?\d{2}\s?\d{2}|@|telefon|email|e-post|$)", section, re.I)
-        if m:
-            head = m.group(1).strip()
-        else:
-            # Try to parse the section directly — strip leading whitespace + handle
-            # case where section begins with the person name.
-            head = section
+        m = re.search(
+            r"Kontaktperson(?:\s+for\s+stillingen)?\s+([^\d+@]{5,120}?)(?=\+?\d{2}\s?\d{2}|@|telefon|email|e-post|$)",
+            section,
+            re.I,
+        )
+        # Fall back to the whole section: NAV often starts it with the name
+        # because the "Kontaktperson" heading sits outside the block.
+        head = m.group(1).strip() if m else section
         name, role = _split_name_role(head.strip())
-        if name and len(name.split()) >= 2 and not re.search(r"(personvern|cookies|tilgjengeligh)", name, re.I):
+        if (
+            name
+            and len(name.split()) >= 2
+            and not re.search(r"(personvern|cookies|tilgjengeligh)", name, re.I)
+        ):
             out["recruiter_name"] = name
             if role and len(role) >= 3:
                 out["recruiter_title"] = role
@@ -134,16 +176,25 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
         # Capture the name when this pattern appears.
         for m in re.finditer(r"Kontaktperson\s*:?\s*([^:]{3,60}?)\s+Stillingstittel", section, re.I):
             cand = m.group(1).strip()
-            if 2 <= len(cand.split()) <= 5 and not re.search(r"^(Send|Mobil|Telefon|Epost|E[-\s]?post)\b", cand, re.I):
+            if 2 <= len(cand.split()) <= 5 and not re.search(
+                r"^(Send|Mobil|Telefon|Epost|E[-\s]?post)\b", cand, re.I
+            ):
                 out["recruiter_name"] = cand
                 # If the role/title comes right after, capture it too
-                m2 = re.search(rf"Stillingstittel\s*:?\s*([^:]{{3,80}}?)(?:\s+Mobil|\s+Telefon|\s+E[-\s]?post|\s+Send|$)", section[m.end():], re.I)
+                m2 = re.search(
+                    r"Stillingstittel\s*:?\s*([^:]{3,80}?)(?:\s+Mobil|\s+Telefon|\s+E[-\s]?post|\s+Send|$)",
+                    section[m.end() :],
+                    re.I,
+                )
                 if m2:
                     out["recruiter_title"] = m2.group(1).strip()
                 break
         # Also try generic "Kontakt:" prefix on EN sites (works without 'Stillingstittel')
         if "recruiter_name" not in out:
-            m = re.search(r"(?:Kontaktperson|Contact(?:\s+person)?|Kontakt)\s*:?\s*([A-ZÆØÅÄÖÜ][A-Za-zæøåäöüß'\-]+(?:\s+[A-ZÆØÅÄÖÜ][A-Za-zæøåäöüß'\-]+){1,3})", section)
+            m = re.search(
+                r"(?:Kontaktperson|Contact(?:\s+person)?|Kontakt)\s*:?\s*([A-ZÆØÅÄÖÜ][A-Za-zæøåäöüß'\-]+(?:\s+[A-ZÆØÅÄÖÜ][A-Za-zæøåäöüß'\-]+){1,3})",
+                section,
+            )
             if m:
                 out["recruiter_name"] = m.group(1).strip()
         # Look for a real person name. Reject:
@@ -166,7 +217,9 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
             r"News|Industry|Partner|Advertise|Related)",
             re.I,
         )
-        company_suffix_rx = re.compile(r"(group|holding|inc|ltd|gmbh|as|asa|ab|s\.a\.|nv|bv|llc|llp|plc|ag|sa|gbr)\b", re.I)
+        company_suffix_rx = re.compile(
+            r"(group|holding|inc|ltd|gmbh|as|asa|ab|s\.a\.|nv|bv|llc|llp|plc|ag|sa|gbr)\b", re.I
+        )
         if "recruiter_name" not in out:  # don't overwrite earlier NAV/finn extraction
             for cand in ns:
                 parts = cand.split()
@@ -180,7 +233,8 @@ def mine_contacts(html: str, *, country_hint: Optional[str] = None) -> Dict[str,
                 break
         # Section-local phone/email
         sec_phones = [
-            _normalize_phone(p) for p in (NO_PHONE_RX.findall(section) if country_hint == "NO" else PHONE_RX.findall(section))
+            _normalize_phone(p)
+            for p in (NO_PHONE_RX.findall(section) if country_hint == "NO" else PHONE_RX.findall(section))
         ]
         sec_phones = [p for p in sec_phones if _valid_phone(p)]
         if sec_phones:
@@ -199,7 +253,7 @@ def _find_contact_section(soup: BeautifulSoup) -> str:
         if not text or len(text) > 120:
             continue
         if CONTACT_KEYWORDS.search(text):
-            buf: List[str] = []
+            buf: list[str] = []
             for sib in h.next_siblings:
                 if not getattr(sib, "name", None):
                     if isinstance(sib, str) and sib.strip():
@@ -235,7 +289,7 @@ ROLE_HINT_RX = re.compile(
 )
 
 
-def _split_name_role(text: str) -> Tuple[str, str]:
+def _split_name_role(text: str) -> tuple[str, str]:
     """Given a contact line like 'Magnus Millenvik Leder digitalisering...',
     split into (name, role). Uses Norwegian role keywords + capitalization
     rules. Returns ('', '') if no name detected.
@@ -260,7 +314,9 @@ def _split_name_role(text: str) -> Tuple[str, str]:
     role_chunks = chain[cut:] + rest.split()
     role_text = " ".join(role_chunks)
     # Truncate role at first phone-like token or trailing icon labels.
-    role_m = re.match(r"^(.+?)\s*(?:\+?\d[\d\s\-]{6,}|Kopier|telefon:|tel:|mob:|email|e-post|@)", role_text, re.I)
+    role_m = re.match(
+        r"^(.+?)\s*(?:\+?\d[\d\s\-]{6,}|Kopier|telefon:|tel:|mob:|email|e-post|@)", role_text, re.I
+    )
     role = (role_m.group(1) if role_m else role_text).strip(" ,;:")
     if len(role) > 120:
         role = role[:120]
@@ -295,14 +351,12 @@ def _valid_phone(p: str) -> bool:
     if re.fullmatch(r"\d{9,12}", p):
         return False
     # Date string
-    if _DATE_LIKE_RX.match(p):
-        return False
-    return True
+    return not _DATE_LIKE_RX.match(p)
 
 
-def _uniq_preserve(items: List[str]) -> List[str]:
+def _uniq_preserve(items: list[str]) -> list[str]:
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for x in items:
         k = x.lower()
         if k in seen:
@@ -329,7 +383,7 @@ TITLE_SITE_PREFIX = re.compile(
 )
 
 
-def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] = None) -> Optional[JobListing]:
+def universal_extract(html: str, page_url: str, *, country_hint: str | None = None) -> JobListing | None:
     """Extract a JobListing from a job-detail page without relying on JSON-LD.
 
     Always returns a listing if title is detectable (heuristic check); returns
@@ -375,14 +429,19 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
 
     # Company
     org = _meta(soup, "og:site_name")
-    if org and parsed.netloc and org.lower() not in parsed.netloc:
-        # Often og:site_name = the platform (finn.no, NAV). Filter that.
-        if not re.search(r"(finn\.no|nav|arbeidsplassen|jobbnorge|linkedin|indeed|stepstone)", org, re.I):
-            j.company = org
+    # Often og:site_name is the platform (finn.no, NAV), not the employer.
+    if org and parsed.netloc and org.lower() not in parsed.netloc and not AGGREGATOR_NAME_RX.search(org):
+        j.company = org
 
     # Try .company class / itemprop="hiringOrganization"
     if not j.company:
-        for sel in ("[itemprop='hiringOrganization']", "[itemprop='name']", ".company-name", "[class*='company']", "[class*='employer']"):
+        for sel in (
+            "[itemprop='hiringOrganization']",
+            "[itemprop='name']",
+            ".company-name",
+            "[class*='company']",
+            "[class*='employer']",
+        ):
             el = soup.select_one(sel)
             if el:
                 t = el.get_text(" ", strip=True)
@@ -399,7 +458,14 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
                 j.location = j.location or t
                 break
     if country_hint:
-        j.country = j.country or {"NO": "Norway", "DE": "Germany", "CH": "Switzerland", "SE": "Sweden", "DK": "Denmark", "FI": "Finland"}.get(country_hint, "")
+        j.country = j.country or {
+            "NO": "Norway",
+            "DE": "Germany",
+            "CH": "Switzerland",
+            "SE": "Sweden",
+            "DK": "Denmark",
+            "FI": "Finland",
+        }.get(country_hint, "")
 
     # HR contacts
     contacts = mine_contacts(html, country_hint=country_hint)
@@ -424,9 +490,8 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
             apply_url = abs_url
             break
         text = a.get_text(" ", strip=True).lower()
-        if text in ("apply", "apply now", "søk stillingen", "søk her", "søk", "bewerben", "jetzt bewerben", "postuler", "candidater"):
-            if not apply_url:
-                apply_url = abs_url
+        if not apply_url and text in APPLY_ANCHOR_TEXTS:
+            apply_url = abs_url
     if apply_url:
         j.apply_url = apply_url
     j.apply_url = j.apply_url or page_url
@@ -434,7 +499,7 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
 
     # ---- Site-specific selectors (improve coverage where universal heuristics miss) ----
     if "arbeidsplassen.nav.no" in parsed.netloc:
-        _nav_no_adData(html, j)        # NEW: parse __next_f adData payload first
+        _nav_no_ad_data(html, j)  # NEW: parse __next_f adData payload first
         _nav_no_specific(soup, j)
     elif "karrierestart.no" in parsed.netloc:
         _karrierestart_specific(soup, j)
@@ -443,6 +508,7 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
 
     # Section parsing — delegate to extract.py's parser (already handles EN/DE/FR/IT/NO)
     from .extract import _parse_jd_sections
+
     if j.description:
         sects = _parse_jd_sections(str(desc_node) if desc_node else html)
         for k, v in sects.items():
@@ -465,11 +531,90 @@ def universal_extract(html: str, page_url: str, *, country_hint: Optional[str] =
 
     if not j.seniority:
         from .extract import SENIORITY
+
         for name, rx in SENIORITY:
             if (j.title and rx.search(j.title)) or (j.description and rx.search(j.description)):
                 j.seniority = name
                 break
     return j
+
+
+#: NAV <dl> label → JobListing field. Keys prefixed with "_" are stashed in
+#: `extras` instead of a schema field; "_skip" is discarded outright.
+NAV_DL_LABEL_MAP = {
+    "Stillingstittel": "_role_title",  # role title — different from job title
+    "Type ansettelse": "employment_type",
+    "Arbeidstid": "_work_hours",
+    "Antall stillinger": "_skip",
+    "Stillingsbrøk": "_employment_pct",
+    "Sektor": "company_industry",
+    "Bransje": "company_industry",
+    "Stillingsfunksjon": "department",
+    "Yrke": "department",
+    "Fagområde": "department",
+    "Arbeidsspråk": "language",
+    "Nettsted": "company_website",
+    "Stillingsnummer": "external_id",
+    "Sist endret": "posted_date",
+    "Hentet fra": "_ats_source",
+    "Referanse": "requisition_id",
+    "Søknadsfrist": "valid_through",
+    "Frist": "valid_through",
+    "Tiltreder": "start_date",
+    "Oppstart": "start_date",
+    "Reisemengde": "travel_required",
+}
+
+NAV_HEADER_LABEL_MAP = {
+    "Arbeidsgiver": "company",
+    "Sted": "location",
+}
+
+NAV_BUTTON_WORDS_RX = re.compile(
+    r"\b(Del annonsen|Lagre|Følg|Kopier|Send|Søk her|Vis kart|Tilbake|Neste|"
+    r"Forrige|Last ned|Skriv ut|Logg inn)\b",
+    re.I,
+)
+
+NAV_OTHER_LABEL_RX = re.compile(
+    r"\b(Stillingstittel|Stillingsnummer|Søknadsfrist|"
+    r"Kontaktperson|Sist endret|Referansenr|Antall stillinger|"
+    r"Type ansettelse|Arbeidstid|Sektor|Bransje|Nettsted|"
+    r"Stillingsfunksjon)\b",
+    re.I,
+)
+
+# A captured value that is itself one of these is a mis-parse, not a value.
+NAV_STOP_LABEL_RX = (
+    r"Stillingstype|Heltid|Deltid|Sektor|Bransje|Arbeidsspr(å|a)k|Antall\s+stillinger|"
+    r"Stillingsbr(ø|o)k|Publisert|S(ø|o)knadsfrist|Frist|Stillingsprosent|Ansettelsesform|"
+    r"Tiltreder|Oppstart|Sted|Beliggenhet|Reisemengde|Hjemmekontor|Kontaktperson|"
+    r"Arbeidssted|Arbeidstid|Arbeidsgiver|Stillingsfunksjon|Yrke|Fagomr(å|a)de|"
+    r"Referansenr|Referanse|Stilling$"
+)
+
+# (label, field, value_pattern). The value pattern guarantees we only accept
+# plausible content (date / pct / role), so the regex can't grab the next
+# label's text or a button caption like "Del annonsen".
+NAV_FALLBACK_SPECS = [
+    (
+        "Søknadsfrist",
+        "valid_through",
+        r"(\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2}|snarest|løpende|fortløpende|umiddelbart)",
+    ),
+    ("Frist", "valid_through", r"(\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2})"),
+    ("Publisert", "posted_date", r"(\d{1,2}\.\s*\w+\s*\d{4}|\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2})"),
+    ("Stillingsprosent", "employment_type", r"(\d{1,3}\s?%\s*(?:fast|midlertidig|vikariat)?[\w\s]{0,30})"),
+    ("Ansettelsesform", "employment_type", r"([A-ZÆØÅa-zæøå][^,\n]{2,50})"),
+    ("Tiltreder", "start_date", r"([A-ZÆØÅa-zæøå0-9][^\n]{2,50})"),
+    ("Oppstart", "start_date", r"([A-ZÆØÅa-zæøå0-9][^\n]{2,50})"),
+    ("Arbeidsspråk", "language", r"([A-ZÆØÅa-zæøå][^,\n]{2,50})"),
+    ("Stillingsfunksjon", "department", r"([A-ZÆØÅa-zæøå][^\n]{3,80})"),
+    ("Yrke", "department", r"([A-ZÆØÅa-zæøå][^\n]{3,80})"),
+    ("Fagområde", "department", r"([A-ZÆØÅa-zæøå][^\n]{3,80})"),
+    ("Reisemengde", "travel_required", r"([A-ZÆØÅa-zæøå0-9][^\n]{2,80})"),
+    ("Referansenr\\.?", "requisition_id", r"([A-Za-z0-9_\-]{3,40})"),
+]
 
 
 def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
@@ -478,40 +623,20 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
     text-node label matching for label/value pairs outside <dl>.
     """
     # --- Strategy 1: structured <dl>/<dt>/<dd> pairs (most reliable) ---
-    DL_LABEL_MAP = {
-        "Stillingstittel": "_role_title",            # role title — different from job title
-        "Type ansettelse": "employment_type",
-        "Arbeidstid": "_work_hours",
-        "Antall stillinger": "_skip",
-        "Stillingsbrøk": "_employment_pct",
-        "Sektor": "company_industry",
-        "Bransje": "company_industry",
-        "Stillingsfunksjon": "department",
-        "Yrke": "department",
-        "Fagområde": "department",
-        "Arbeidsspråk": "language",
-        "Nettsted": "company_website",
-        "Stillingsnummer": "external_id",
-        "Sist endret": "posted_date",
-        "Hentet fra": "_ats_source",
-        "Referanse": "requisition_id",
-        "Søknadsfrist": "valid_through",
-        "Frist": "valid_through",
-        "Tiltreder": "start_date",
-        "Oppstart": "start_date",
-        "Reisemengde": "travel_required",
-    }
     for dl in soup.find_all("dl"):
         dts = dl.find_all("dt")
         dds = dl.find_all("dd")
         if not dts or not dds:
             continue
-        for dt, dd in zip(dts, dds):
+        # strict=False on purpose: a malformed <dl> with a mismatched dt/dd
+        # count is common in the wild and must not abort extraction — pair
+        # what we can and ignore the tail.
+        for dt, dd in zip(dts, dds, strict=False):
             label = _normalize(dt.get_text(" ", strip=True))
             value = _normalize(dd.get_text(" ", strip=True))
             if not label or not value:
                 continue
-            field = DL_LABEL_MAP.get(label)
+            field = NAV_DL_LABEL_MAP.get(label)
             if not field or field == "_skip":
                 # Store any non-mapped label in extras
                 if value and len(value) < 500:
@@ -528,7 +653,7 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
     # --- Strategy 2: <h3> heading + next sibling div (NAV sometimes uses this) ---
     for h3 in soup.find_all(["h2", "h3"]):
         label = _normalize(h3.get_text(" ", strip=True))
-        if not label or label not in DL_LABEL_MAP:
+        if not label or label not in NAV_DL_LABEL_MAP:
             continue
         # Walk forward to find a small text block
         for sib in h3.next_siblings:
@@ -536,7 +661,7 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
                 continue
             txt = _normalize(sib.get_text(" ", strip=True))
             if 2 < len(txt) < 200 and not txt.startswith(("Stillingstittel", "Type ansettelse")):
-                field = DL_LABEL_MAP[label]
+                field = NAV_DL_LABEL_MAP[label]
                 if field.startswith("_") or field == "_skip":
                     continue
                 cur = getattr(j, field, "")
@@ -544,19 +669,10 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
                     setattr(j, field, txt)
                 break
 
-
     # Sibling-matcher for header-style labels (Arbeidsgiver, Sted) that NAV
     # renders as a heading text node followed by SVG + nested content blocks.
     # WHITE-LIST only — to avoid the "Del annonsen" leak.
-    header_label_map = {
-        "Arbeidsgiver": "company",
-        "Sted": "location",
-    }
-    button_words_rx = re.compile(
-        r"\b(Del annonsen|Lagre|Følg|Kopier|Send|Søk her|Vis kart|Tilbake|Neste|"
-        r"Forrige|Last ned|Skriv ut|Logg inn)\b", re.I,
-    )
-    for label, field in header_label_map.items():
+    for label, field in NAV_HEADER_LABEL_MAP.items():
         if getattr(j, field, ""):
             continue
         rx = re.compile(rf"^\s*{re.escape(label)}\s*$", re.I)
@@ -569,15 +685,10 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
                 for sib in ancestor.find_next_siblings():
                     if not getattr(sib, "get_text", None):
                         continue
-                    txt = re.sub(r"\s+", " ", sib.get_text(" ", strip=True)).strip()
+                    txt = _normalize(sib.get_text(" ", strip=True))
                     if not txt or len(txt) > 250:
                         continue
-                    if button_words_rx.search(txt):
-                        continue
-                    if re.search(r"\b(Stillingstittel|Stillingsnummer|Søknadsfrist|"
-                                 r"Kontaktperson|Sist endret|Referansenr|Antall stillinger|"
-                                 r"Type ansettelse|Arbeidstid|Sektor|Bransje|Nettsted|"
-                                 r"Stillingsfunksjon)\b", txt, re.I):
+                    if NAV_BUTTON_WORDS_RX.search(txt) or NAV_OTHER_LABEL_RX.search(txt):
                         continue
                     value = txt
                     break
@@ -592,46 +703,18 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
     # Mine body text for `Label: value` inline pairs NAV uses outside <dl>.
     body_txt = soup.get_text(" ", strip=True)
 
-    # Stop words: another label OR a long word break OR end-of-line
-    STOP_LABEL_RX = (
-        r"Stillingstype|Heltid|Deltid|Sektor|Bransje|Arbeidsspr(å|a)k|Antall\s+stillinger|"
-        r"Stillingsbr(ø|o)k|Publisert|S(ø|o)knadsfrist|Frist|Stillingsprosent|Ansettelsesform|"
-        r"Tiltreder|Oppstart|Sted|Beliggenhet|Reisemengde|Hjemmekontor|Kontaktperson|"
-        r"Arbeidssted|Arbeidstid|Arbeidsgiver|Stillingsfunksjon|Yrke|Fagomr(å|a)de|"
-        r"Referansenr|Referanse|Sektor|Stilling$"
-    )
-    # Each entry: (label, field, value_pattern). Value pattern guarantees we
-    # only accept plausible content (date / pct / role / etc.) — prevents the
-    # regex from grabbing the next label's text or button labels like "Del annonsen".
-    fallback_specs = [
-        ("Søknadsfrist", "valid_through", r"(\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2}|snarest|løpende|fortløpende|umiddelbart)"),
-        ("Frist", "valid_through", r"(\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2})"),
-        ("Publisert", "posted_date", r"(\d{1,2}\.\s*\w+\s*\d{4}|\d{1,2}\.\d{1,2}\.\d{2,4}|\d{4}-\d{2}-\d{2})"),
-        ("Stillingsprosent", "employment_type", r"(\d{1,3}\s?%\s*(?:fast|midlertidig|vikariat)?[\w\s]{0,30})"),
-        ("Ansettelsesform", "employment_type", r"([A-ZÆØÅa-zæøå][^,\n]{2,50})"),
-        ("Tiltreder", "start_date", r"([A-ZÆØÅa-zæøå0-9][^\n]{2,50})"),
-        ("Oppstart", "start_date", r"([A-ZÆØÅa-zæøå0-9][^\n]{2,50})"),
-        ("Arbeidsspråk", "language", r"([A-ZÆØÅa-zæøå][^,\n]{2,50})"),
-        ("Stillingsfunksjon", "department", r"([A-ZÆØÅa-zæøå][^\n]{3,80})"),
-        ("Yrke", "department", r"([A-ZÆØÅa-zæøå][^\n]{3,80})"),
-        ("Fagområde", "department", r"([A-ZÆØÅa-zæøå][^\n]{3,80})"),
-        ("Reisemengde", "travel_required", r"([A-ZÆØÅa-zæøå0-9][^\n]{2,80})"),
-        ("Referansenr\\.?", "requisition_id", r"([A-Za-z0-9_\-]{3,40})"),
-    ]
-    for label, field, vp in fallback_specs:
+    for label, field, value_pattern in NAV_FALLBACK_SPECS:
         if getattr(j, field, ""):
             continue
-        m = re.search(
-            rf"\b{label}\b\s*:?\s*{vp}",
-            body_txt,
-            re.I,
-        )
-        if m:
-            v = m.group(1).strip(" \t:-—,;")
-            if v and len(v) < 100 and v.lower() not in ("none", "null", "n/a"):
-                # Reject if the captured value is itself a stop-label
-                if not re.search(rf"^(?:{STOP_LABEL_RX})$", v, re.I):
-                    setattr(j, field, v)
+        m = re.search(rf"\b{label}\b\s*:?\s*{value_pattern}", body_txt, re.I)
+        if not m:
+            continue
+        value = m.group(1).strip(" \t:-—,;")
+        if not value or len(value) >= 100 or value.lower() in ("none", "null", "n/a"):
+            continue
+        # Reject if the captured value is itself a stop-label
+        if not re.search(rf"^(?:{NAV_STOP_LABEL_RX})$", value, re.I):
+            setattr(j, field, value)
 
     # NAV's location string is "<street>, <postal> <city>". Parse for real city.
     if j.location and not j.city:
@@ -648,37 +731,47 @@ def _nav_no_specific(soup: BeautifulSoup, j: JobListing) -> None:
             j.postal_code = m.group(1)
 
 
+#: karrierestart.no fact-card label → JobListing field.
+KARRIERESTART_LABEL_MAP = {
+    "Stillingstype": "employment_type",
+    "Arbeidssted": "location",
+    "Sted": "location",
+    "Bransje": "company_industry",
+    "Bransjer": "company_industry",  # plural form on KS detail pages
+    "Antall stillinger": "_skip",
+    "Tiltredelse": "start_date",
+    "Tiltreder": "start_date",
+    "Oppstart": "start_date",
+    "Søknadsfrist": "valid_through",
+    "Frist": "valid_through",
+    "Publisert": "posted_date",
+    "Stillingsfunksjon": "department",
+    "Sektor": "company_industry",
+    "Yrke": "department",
+    "Yrker": "department",  # plural form
+    "Fagområde": "department",
+    "Fagområder": "department",  # plural form
+    "Heltid/Deltid": "employment_type",
+    "Stillingsbrøk": "_employment_pct",
+    "Arbeidsspråk": "language",
+    "Hjemmekontor": "remote_type",
+    "Reisemengde": "travel_required",
+    "Krav til førerkort": "_drivers_license",
+}
+
+# Text that is site chrome (nav, socials, CTA) rather than a company name.
+KARRIERESTART_BAD_COMPANY_RX = re.compile(
+    r"(arbeidsgiverguiden|m.t attraktive|partnere|annonsere|nyheter|relaterte|"
+    r"kontaktperson|instagram|facebook|linkedin|twitter|youtube|tiktok|profil)",
+    re.I,
+)
+
+
 def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
     """Pull karrierestart.no-specific labelled fields. Page uses
     <div class="fact-card-title">Label</div><div class="fact-card-content">Value</div>
     pairs inside .fact-card containers. Labels are Norwegian.
     """
-    LABEL_MAP = {
-        "Stillingstype": "employment_type",
-        "Arbeidssted": "location",
-        "Sted": "location",
-        "Bransje": "company_industry",
-        "Bransjer": "company_industry",          # plural form on KS detail pages
-        "Antall stillinger": "_skip",
-        "Tiltredelse": "start_date",
-        "Tiltreder": "start_date",
-        "Oppstart": "start_date",
-        "Søknadsfrist": "valid_through",
-        "Frist": "valid_through",
-        "Publisert": "posted_date",
-        "Stillingsfunksjon": "department",
-        "Sektor": "company_industry",
-        "Yrke": "department",
-        "Yrker": "department",                    # plural form
-        "Fagområde": "department",
-        "Fagområder": "department",               # plural form
-        "Heltid/Deltid": "employment_type",
-        "Stillingsbrøk": "_employment_pct",
-        "Arbeidsspråk": "language",
-        "Hjemmekontor": "remote_type",
-        "Reisemengde": "travel_required",
-        "Krav til førerkort": "_drivers_license",
-    }
     for card in soup.select(".fact-card, .fact-grid > div"):
         title_el = card.select_one(".fact-card-title")
         content_el = card.select_one(".fact-card-content")
@@ -688,7 +781,7 @@ def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
         value = _normalize(content_el.get_text(" ", strip=True))
         if not label or not value or len(value) > 200:
             continue
-        field = LABEL_MAP.get(label)
+        field = KARRIERESTART_LABEL_MAP.get(label)
         if field is None:
             # Stash unmapped labels in extras for transparency
             j.set_extra(f"karrierestart_{label.lower().replace(' ', '_')}", value)
@@ -706,30 +799,25 @@ def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
     # 2. Title prefix before " - " (e.g. "ABB - Local Trade Compliance officer")
     # 3. .company-desc h2/h3 (skip <a> since first <a> often = social link)
     # Skip junk text: nav labels, social-network names, CTA blocks
-    BAD = re.compile(
-        r"(arbeidsgiverguiden|m.t attraktive|partnere|annonsere|nyheter|relaterte|"
-        r"kontaktperson|instagram|facebook|linkedin|twitter|youtube|tiktok|profil)",
-        re.I,
-    )
-    if not j.company or BAD.search(j.company):
+    bad = KARRIERESTART_BAD_COMPANY_RX
+    if not j.company or bad.search(j.company):
         # Strategy 1: company logo img alt
         img = soup.select_one(".jobad_company_logo img, [class*='company_logo'] img")
-        if img and img.get("alt"):
-            alt = _normalize(img.get("alt", "").strip())
-            if alt and 2 <= len(alt) <= 80 and not BAD.search(alt):
-                j.company = alt
+        alt = _normalize(_attr(img, "alt")) if img else ""
+        if alt and 2 <= len(alt) <= 80 and not bad.search(alt):
+            j.company = alt
         # Strategy 2: title-prefix
-        if (not j.company or BAD.search(j.company)) and j.title and " - " in j.title:
+        if (not j.company or bad.search(j.company)) and j.title and " - " in j.title:
             prefix = j.title.split(" - ", 1)[0].strip()
             if 2 <= len(prefix) <= 60 and not re.search(r"\d", prefix):
                 j.company = prefix
         # Strategy 3: standard selectors
-        if not j.company or BAD.search(j.company):
+        if not j.company or bad.search(j.company):
             for sel in (".company-name a", ".company-name", ".jp-company"):
                 el = soup.select_one(sel)
                 if el:
                     t = _normalize(el.get_text(" ", strip=True))
-                    if t and 2 <= len(t) <= 80 and not BAD.search(t):
+                    if t and 2 <= len(t) <= 80 and not bad.search(t):
                         j.company = t
                         break
 
@@ -763,21 +851,20 @@ def _karrierestart_specific(soup: BeautifulSoup, j: JobListing) -> None:
                 j.valid_through = t
 
 
-def _nav_no_adData(html: str, j: JobListing) -> None:
+def _nav_no_ad_data(html: str, j: JobListing) -> None:
     """NAV embeds full job structured data in self.__next_f.push() chunks.
     Concatenate all chunks, locate the `adData` key, depth-balance parse the
     JSON object, then map its fields. This is the richest data source on NAV
     pages — gives us valid_through, application_email, employer industry,
     apply_url, category list, work-languages, location detail, etc.
     """
-    import json as _json
     chunks = re.findall(r'self\.__next_f\.push\(\[\d+,(".*?")\]\)', html, re.S)
     if not chunks:
         return
     full = ""
     for c in chunks:
         try:
-            full += _json.loads(c)
+            full += json.loads(c)
         except Exception:
             continue
     if '"adData":' not in full:
@@ -811,7 +898,7 @@ def _nav_no_adData(html: str, j: JobListing) -> None:
                     end = i + 1
                     break
     try:
-        d = _json.loads(full[start:end])
+        d = json.loads(full[start:end])
     except Exception:
         return
 
@@ -888,7 +975,6 @@ def _nav_no_adData(html: str, j: JobListing) -> None:
 
 def _jobbsafari_specific(soup: BeautifulSoup, j: JobListing, html: str) -> None:
     """jobbsafari.no embeds full job structured data in __NEXT_DATA__ JSON."""
-    import json
     m = re.search(r'<script id="__NEXT_DATA__"[^>]*>([^<]+)</script>', html)
     if not m:
         return
@@ -911,15 +997,10 @@ def _jobbsafari_specific(soup: BeautifulSoup, j: JobListing, html: str) -> None:
     desc_html = je.get("description") or ""
     plain_desc = ""
     if desc_html:
-        from bs4 import BeautifulSoup as BS
-        plain_desc = _normalize(BS(desc_html, "lxml").get_text(" ", strip=True))
+        plain_desc = _normalize(BeautifulSoup(desc_html, "lxml").get_text(" ", strip=True))
     real_employer = ""
-    # Reject the regex match when the captured token starts with junk words
-    EMPLOYER_REJECT_RX = re.compile(
-        r"^(Stillingen|The position|Beskrivelse|Description|Om|About|Vi|We|Du|You|"
-        r"Søknad|Søker|Application|This is just|Tasks|Oppgaver)\b",
-        re.I,
-    )
+    # Reject the regex match when the captured token starts with junk words —
+    # see JOBBSAFARI_EMPLOYER_REJECT_RX at module level.
     if plain_desc:
         m_emp = re.search(
             r"(?:Om stillingen|About the position)\s+([A-ZÆØÅ][A-Za-zÆØÅæøåäöü0-9 .,&\-]{2,80}?)"
@@ -928,7 +1009,7 @@ def _jobbsafari_specific(soup: BeautifulSoup, j: JobListing, html: str) -> None:
         )
         if m_emp:
             cand = m_emp.group(1).strip().rstrip(",.")
-            if 1 <= len(cand.split()) <= 8 and not EMPLOYER_REJECT_RX.search(cand):
+            if 1 <= len(cand.split()) <= 8 and not JOBBSAFARI_EMPLOYER_REJECT_RX.search(cand):
                 real_employer = cand
     if real_employer:
         j.company = real_employer
@@ -938,8 +1019,7 @@ def _jobbsafari_specific(soup: BeautifulSoup, j: JobListing, html: str) -> None:
     desc = je.get("description") or ""
     if desc and (not j.description or len(j.description) < len(desc)):
         # strip HTML
-        from bs4 import BeautifulSoup as BS
-        text = _normalize(BS(desc, "lxml").get_text(" ", strip=True))
+        text = _normalize(BeautifulSoup(desc, "lxml").get_text(" ", strip=True))
         if text:
             j.description = text[:15000]
     # Dates: startDate=publish, endDate=deadline
@@ -986,23 +1066,45 @@ def _looks_like_job_page(soup: BeautifulSoup, page_url: str) -> bool:
     if any(t in path for t in ("/job", "/stilling", "/career", "/vacancy", "/joboffer", "/ad/")):
         return True
     text = soup.get_text(" ", strip=True).lower()
-    signals = ["apply", "responsibilities", "requirements", "qualifications",
-               "søk", "stillingen", "arbeidsgiver", "aufgaben", "anforderungen",
-               "deine aufgaben"]
+    signals = [
+        "apply",
+        "responsibilities",
+        "requirements",
+        "qualifications",
+        "søk",
+        "stillingen",
+        "arbeidsgiver",
+        "aufgaben",
+        "anforderungen",
+        "deine aufgaben",
+    ]
     return sum(1 for s in signals if s in text) >= 2
 
 
 def _meta(soup: BeautifulSoup, name: str) -> str:
     el = soup.find("meta", attrs={"property": name}) or soup.find("meta", attrs={"name": name})
-    if el and el.get("content"):
-        return el["content"].strip()
-    return ""
+    if el is None:
+        return ""
+    value = el.get("content")
+    if value is None:
+        return ""
+    # bs4 hands back a list for multi-valued attributes.
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(v) for v in value).strip()
+    return str(value).strip()
 
 
-def _main_content_node(soup: BeautifulSoup) -> Optional[Tag]:
-    for sel in ["main", "article", "[role='main']", "[class*='job-detail']",
-                "[class*='posting']", "[class*='vacancy']", "[id*='job-detail']",
-                "[class*='description']"]:
+def _main_content_node(soup: BeautifulSoup) -> Tag | None:
+    for sel in [
+        "main",
+        "article",
+        "[role='main']",
+        "[class*='job-detail']",
+        "[class*='posting']",
+        "[class*='vacancy']",
+        "[id*='job-detail']",
+        "[class*='description']",
+    ]:
         el = soup.select_one(sel)
         if el and len(el.get_text(strip=True)) > 100:
             return el
@@ -1013,11 +1115,24 @@ def _normalize(s: str) -> str:
     return re.sub(r"\s+", " ", s or "").strip()
 
 
+def _attr(el: object, name: str) -> str:
+    """Read an attribute as a string; bs4 returns a list for multi-valued attrs."""
+    if el is None:
+        return ""
+    value = el.get(name)  # type: ignore[attr-defined]
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(v) for v in value).strip()
+    return str(value).strip()
+
+
 # ---------------------------------------------------------------------------
 # Anchor-cluster detection: find the job-link cluster on any listing page
 # ---------------------------------------------------------------------------
 
-def cluster_anchors(html: str, base_url: str) -> List[str]:
+
+def cluster_anchors(html: str, base_url: str) -> list[str]:
     """Return URLs of the largest anchor cluster that looks like job detail
     pages. Works on any site without per-site selectors.
 
@@ -1030,7 +1145,7 @@ def cluster_anchors(html: str, base_url: str) -> List[str]:
     soup = BeautifulSoup(html, "lxml")
     parsed_base = urlparse(base_url)
     same_host = parsed_base.netloc.lower()
-    by_prefix: Dict[str, List[str]] = defaultdict(list)
+    by_prefix: dict[str, list[str]] = defaultdict(list)
     for a in soup.find_all("a", href=True):
         href = a.get("href", "").strip()
         if not href or href.startswith(("javascript:", "mailto:", "tel:", "#")):
@@ -1052,11 +1167,9 @@ def cluster_anchors(html: str, base_url: str) -> List[str]:
     if not by_prefix:
         return []
 
-    JOB_HINT = re.compile(r"(job|stilling|vacanc|career|posting|opening|ad|opportunit|trabajo)", re.I)
-
-    def score(prefix: str, urls: List[str]) -> Tuple[int, int]:
+    def score(prefix: str, urls: list[str]) -> tuple[int, int]:
         # Tuple: (count weight, job-keyword bonus)
-        kw_bonus = 2 if JOB_HINT.search(prefix) else 0
+        kw_bonus = 2 if JOB_HINT_RX.search(prefix) else 0
         return (len(urls) + kw_bonus * 5, kw_bonus)
 
     ranked = sorted(by_prefix.items(), key=lambda kv: score(kv[0], kv[1]), reverse=True)
@@ -1066,7 +1179,7 @@ def cluster_anchors(html: str, base_url: str) -> List[str]:
         return []
     # Dedupe preserving order
     seen = set()
-    out: List[str] = []
+    out: list[str] = []
     for u in top_urls:
         if u in seen:
             continue
