@@ -7,6 +7,19 @@ import { smartExtractCards } from "./smartDetector";
 import { extractGeneral, extractGeneralCards } from "./generalExtract";
 import type { ListCard } from "../lib/messages";
 
+/** Fire-and-forget message to the service worker.
+ *  chrome.runtime.sendMessage rejects when no receiver is listening; every
+ *  call site here is advisory, so swallow that rather than emit a console
+ *  error on pages the user is merely browsing. */
+function send(msg: Record<string, unknown>): void {
+  try {
+    const p = chrome.runtime.sendMessage(msg) as unknown as Promise<unknown> | undefined;
+    if (p && typeof (p as any).catch === "function") (p as any).catch(() => {});
+  } catch {
+    /* extension context invalidated (reload/update) */
+  }
+}
+
 const BANNER_ID = "__jh_banner__";
 const STYLE_ID = "__jh_style__";
 let activePaginator: Paginator | null = null;
@@ -91,9 +104,12 @@ async function runDetail() {
   if (!r.job) return false;
 
   const job = r.job;
-  chrome.runtime.sendMessage({ type: "JOB_FOUND", job, detection: r.detection });
+  // sendMessage returns a promise in MV3 and rejects when no receiver is
+  // listening (worker asleep, extension reloading). Unhandled, that surfaces as
+  // a console error on every page load.
+  send({ type: "JOB_FOUND", job, detection: r.detection });
   const cfg = await chrome.storage.local.get(["autoSave", "showBanner"]);
-  if (cfg.autoSave) chrome.runtime.sendMessage({ type: "SAVE_JOB", job });
+  if (cfg.autoSave) send({ type: "SAVE_JOB", job });
   if (cfg.showBanner === false) return true;
 
   const conf = String(((r.detection?.confidence ?? 0) * 100).toFixed(0));
@@ -106,11 +122,11 @@ async function runDetail() {
     (root) => {
       root.querySelector("[data-x]")?.addEventListener("click", () => root.remove());
       root.querySelector("[data-save]")?.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ type: "SAVE_JOB", job });
+        send({ type: "SAVE_JOB", job });
         root.remove();
       });
       root.querySelector("[data-open]")?.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ type: "OPEN_SIDEPANEL" });
+        send({ type: "OPEN_SIDEPANEL" });
       });
     }
   );
@@ -146,11 +162,11 @@ async function runList() {
         root.remove();
       });
       root.querySelector("[data-snap]")?.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ type: "SAVE_LIST", cards, source_domain: location.hostname, source_url: location.href });
+        send({ type: "SAVE_LIST", cards, source_domain: location.hostname, source_url: location.href });
         updateProgress(`✅ Saved ${cards.length} job snapshots.`);
       });
       root.querySelector("[data-deep]")?.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ type: "CRAWL_URLS", urls: cards.map((c: any) => c.url), options: { concurrency: 3 } });
+        send({ type: "CRAWL_URLS", urls: cards.map((c: any) => c.url), options: { concurrency: 3 } });
         updateProgress(`🔄 Deep-scraping ${cards.length} jobs in background…`);
       });
       root.querySelector("[data-paginate]")?.addEventListener("click", async () => {
@@ -159,7 +175,7 @@ async function runList() {
         await runPaginatedScrape();
       });
       root.querySelector("[data-open]")?.addEventListener("click", () => {
-        chrome.runtime.sendMessage({ type: "OPEN_SIDEPANEL" });
+        send({ type: "OPEN_SIDEPANEL" });
       });
     }
   );
@@ -185,11 +201,11 @@ async function runPaginatedScrape() {
   }
 
   // Save snapshots
-  await chrome.runtime.sendMessage({ type: "SAVE_LIST", cards: allCards, source_domain: location.hostname, source_url: location.href });
+  send({ type: "SAVE_LIST", cards: allCards, source_domain: location.hostname, source_url: location.href });
   updateProgress(`✅ Saved ${allCards.length} jobs from all pages. Deep-scraping…`);
 
   // Deep-scrape each. Per-host 1 concurrent + 1.5s delay = no rate-limit damage on jobs.ch.
-  chrome.runtime.sendMessage({
+  send({
     type: "CRAWL_URLS",
     urls: allCards.map((c) => c.url),
     options: { concurrency: 4, perHostConcurrency: 1, perHostDelayMs: 1500, timeoutMs: 45000, retries: 2 },
@@ -257,13 +273,31 @@ chrome.runtime.onMessage.addListener((msg: any, _s: any, sendResponse: any) => {
 });
 
 // ---------------------------------------------------------------------------
-// SPA observer
+// SPA navigation watcher
+//
+// The previous version ran a subtree MutationObserver over the whole document
+// and compared location.href on *every* DOM mutation — on a busy SPA that is
+// thousands of callbacks per second to detect an event the Navigation API
+// reports directly. Prefer the real signal; fall back to a coarse poll.
 // ---------------------------------------------------------------------------
 let lastHref = location.href;
-const obs = new MutationObserver(() => {
-  if (location.href !== lastHref) { lastHref = location.href; setTimeout(main, 1200); }
-});
-obs.observe(document.documentElement, { childList: true, subtree: true });
+let navTimer: ReturnType<typeof setTimeout> | null = null;
+
+function onNavigated() {
+  if (location.href === lastHref) return;
+  lastHref = location.href;
+  if (navTimer) clearTimeout(navTimer);
+  navTimer = setTimeout(() => void main(), 1200);
+}
+
+const nav = (window as any).navigation;
+if (nav?.addEventListener) {
+  nav.addEventListener("navigatesuccess", onNavigated);
+} else {
+  window.addEventListener("popstate", onNavigated);
+  window.addEventListener("hashchange", onNavigated);
+  setInterval(onNavigated, 1000);
+}
 
 function waitForJobContent(timeoutMs = 8000): Promise<void> {
   return new Promise((resolve) => {
@@ -284,12 +318,28 @@ function waitForJobContent(timeoutMs = 8000): Promise<void> {
 }
 
 async function main() {
-  await dismissOverlays(document);
+  // Only touch the page once it actually looks like a job page. The previous
+  // order ran dismissOverlays() first, so the extension clicked cookie/consent
+  // and modal-close buttons on *every* site the user visited — including sites
+  // it would then decline to extract from.
   await waitForJobContent();
+  if (!looksActionable()) return;
+  await dismissOverlays(document);
   const handled = await runDetail();
   if (!handled) await runList();
 }
-main();
+
+/** Cheap gate: is this plausibly a job detail page or a job list page? */
+function looksActionable(): boolean {
+  try {
+    if (detectJobPage().isJob) return true;
+    return listCards().cards.length >= 2;
+  } catch {
+    return false;
+  }
+}
+
+void main();
 
 // Debug surface
 (window as any).__JH = {
