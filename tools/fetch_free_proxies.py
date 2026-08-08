@@ -9,6 +9,7 @@ Usage:
   python tools/fetch_free_proxies.py
   python tools/fetch_free_proxies.py --probe-url https://www.jobs.ch --keep 30 --timeout 5
 """
+
 from __future__ import annotations
 
 import argparse
@@ -19,7 +20,6 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from typing import List, Tuple
 
 # Multiple sources — if one is down, the others might work.
 SOURCES = [
@@ -32,7 +32,7 @@ SOURCES = [
 ]
 
 
-def fetch_source(url: str, timeout: int = 10) -> List[str]:
+def fetch_source(url: str, timeout: int = 10) -> list[str]:
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -40,7 +40,7 @@ def fetch_source(url: str, timeout: int = 10) -> List[str]:
     except Exception as exc:
         logging.warning("source %s: %s", url, exc)
         return []
-    proxies: List[str] = []
+    proxies: list[str] = []
     if url.endswith(".json"):
         try:
             j = json.loads(data)
@@ -62,11 +62,14 @@ def fetch_source(url: str, timeout: int = 10) -> List[str]:
     return proxies
 
 
-def probe(proxy: str, target: str, timeout: int) -> Tuple[str, bool, float]:
+def probe(proxy: str, target: str, timeout: int) -> tuple[str, bool, float]:
     handler = urllib.request.ProxyHandler({"http": proxy, "https": proxy})
     opener = urllib.request.build_opener(handler)
     opener.addheaders = [
-        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"),
+        (
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+        ),
     ]
     t0 = time.time()
     try:
@@ -88,7 +91,7 @@ def main() -> None:
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    all_proxies: List[str] = []
+    all_proxies: list[str] = []
     for src in SOURCES:
         chunk = fetch_source(src)
         logging.info("source %s → %d proxies", src.rsplit("/", 1)[-1], len(chunk))
@@ -105,7 +108,7 @@ def main() -> None:
     if not deduped:
         sys.exit("no proxies fetched")
 
-    live: List[Tuple[str, float]] = []
+    live: list[tuple[str, float]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
         futures = {pool.submit(probe, p, args.probe_url, args.timeout): p for p in deduped}
         for fut in concurrent.futures.as_completed(futures):

@@ -1,12 +1,15 @@
-"""Single entrypoint. Pass `--general` (or set `mode: general` in config) to run the
-general-purpose scraper instead of the job scraper.
+"""Single entrypoint. Dispatches to the job scraper or the general scraper.
 
 Usage:
-  python run.py                        # job scraper, default config.yaml
-  python run.py --config foo.yaml      # job scraper, custom config
-  python run.py --general              # general scraper, config.general.yaml
-  python run.py --general --config x.yaml
+  python run.py                              # job scraper, configs/example.yaml
+  python run.py --config norway-big          # job scraper, configs/regions/norway-big.yaml
+  python run.py --general                    # general scraper, configs/general.example.yaml
+  python run.py --general --config my.yaml
+
+Mode is chosen by `--general`, or automatically when the resolved config
+declares `mode: general` at its top level.
 """
+
 import os
 import sys
 
@@ -16,32 +19,45 @@ if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
 
-def _is_general_mode() -> bool:
-    if "--general" in sys.argv:
-        sys.argv.remove("--general")
-        return True
-    # Sniff the config path for `mode: general` so users can flip via YAML alone.
-    import yaml
-    cfg_path = "config.yaml"
-    for i, arg in enumerate(sys.argv[1:], 1):
-        if arg == "--config" and i + 1 < len(sys.argv):
-            cfg_path = sys.argv[i + 1]
-            break
+def _config_arg(argv: list) -> str:
+    """Read --config out of argv without consuming it (argparse still needs it)."""
+    for i, arg in enumerate(argv):
+        if arg == "--config" and i + 1 < len(argv):
+            return argv[i + 1]
         if arg.startswith("--config="):
-            cfg_path = arg.split("=", 1)[1]
-            break
+            return arg.split("=", 1)[1]
+    return ""
+
+
+def _is_general_mode(argv: list) -> bool:
+    if "--general" in argv:
+        argv.remove("--general")
+        return True
+
+    # Sniff the config for `mode: general` so users can flip modes via YAML alone.
+    from general_scraper.config import is_general_config
+    from job_scraper.config import resolve_config_path
+
+    name = _config_arg(argv)
+    if not name:
+        return False
     try:
-        with open(cfg_path, "r", encoding="utf-8") as h:
-            data = yaml.safe_load(h) or {}
-        return (data.get("mode") or "").lower() == "general"
-    except Exception:
+        return is_general_config(resolve_config_path(name))
+    except (FileNotFoundError, OSError):
+        # Let the real entrypoint report the missing/unreadable config.
         return False
 
 
-if __name__ == "__main__":
-    if _is_general_mode():
+def main() -> None:
+    if _is_general_mode(sys.argv):
         from general_scraper.main import main as general_main
+
         general_main()
     else:
-        from job_scraper.main import main
-        main()
+        from job_scraper.main import main as job_main
+
+        job_main()
+
+
+if __name__ == "__main__":
+    main()

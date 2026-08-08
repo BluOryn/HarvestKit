@@ -1,11 +1,18 @@
-"""Standalone tool: extract everything from the HTTP cache + write a final CSV.
+"""Salvage a blocked run: re-extract everything already in the HTTP cache.
 
-Use when a live run got partially blocked and you want to salvage the cached pages.
-Reads the sqlite cache, runs the full extractor pipeline on every cached detail page,
-merges with the API stub from a fresh listing fetch, and writes the canonical CSV.
+When a live run gets partially WAF-blocked you still have every page it *did*
+fetch sitting in `.cache/http_cache.sqlite`. This re-runs the full extractor
+pipeline over those cached pages and writes a canonical CSV — no new requests.
+
+Usage:
+  python tools/extract_from_cache.py                          # all cached job pages
+  python tools/extract_from_cache.py --url-like '%/detail/%'  # only jobs.ch details
+  python tools/extract_from_cache.py --config sites/jobsch --merge-listings
 """
+
 from __future__ import annotations
 
+import argparse
 import csv
 import logging
 import os
@@ -13,7 +20,6 @@ import sqlite3
 import sys
 import zlib
 from datetime import datetime, timezone
-from typing import Dict
 from urllib.parse import urlparse
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,137 +27,202 @@ SRC = os.path.join(ROOT, "src")
 if SRC not in sys.path:
     sys.path.insert(0, SRC)
 
-from job_scraper.adapters.jobsch import JobsChAdapter
-from job_scraper.config import RunConfig, TargetConfig
+from job_scraper.adapters import get_adapter
+from job_scraper.config import load_config, resolve_config_path
 from job_scraper.extract import extract_job_from_page
 from job_scraper.http import HttpClient
 from job_scraper.models import CSV_COLUMNS, JobListing
+from job_scraper.universal import universal_extract
 
+# Fields worth reporting fill-rate on after a salvage run.
+REPORT_FIELDS = [
+    "title",
+    "company",
+    "company_logo",
+    "company_website",
+    "company_industry",
+    "department",
+    "description",
+    "responsibilities",
+    "requirements",
+    "qualifications",
+    "benefits",
+    "skills",
+    "recruiter_name",
+    "recruiter_title",
+    "recruiter_phone",
+    "recruiter_email",
+    "hiring_manager",
+    "education_required",
+    "experience_years",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "tech_stack",
+    "remote_type",
+    "seniority",
+    "employment_type",
+    "posted_date",
+    "language",
+    "apply_url",
+    "raw_jsonld",
+]
 
-JOBSCH_URL = (
-    "https://www.jobs.ch/en/vacancies/?category=106&category=146&category=156&category=167"
-    "&employment-type=1&employment-type=2&employment-type=4&employment-type=5"
-    "&publication-date=30&term="
-)
+MIN_USEFUL_HTML = 5000
 
 
 def main() -> None:
+    args = _parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    out_path = os.path.join(ROOT, "output", "jobsch_full.csv")
-    cache_path = os.path.join(ROOT, ".cache", "http_cache.sqlite")
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    cache_path = args.cache or os.path.join(ROOT, ".cache", "http_cache.sqlite")
+    if not os.path.isfile(cache_path):
+        logging.error("No cache at %s — nothing to salvage.", cache_path)
+        sys.exit(2)
 
-    # 1. Pull all listings from API (uses cache — no extra hits if listing pages cached).
-    http = HttpClient(
-        user_agent="HarvestKitBot/1.0 (+hriday.vig@bluoryn.com)",
-        delay_seconds=0.5,
-        obey_robots=False,
-        cache_enabled=True,
-        cache_ttl_seconds=86400,
-        cache_path=cache_path,
-        rotate_user_agents=True,
-    )
-    target = TargetConfig(name="jobs.ch", url=JOBSCH_URL, adapter="jobs.ch")
-    run_cfg = RunConfig(
-        user_agent=http.user_agent,
-        delay_seconds=0.5,
-        obey_robots=False,
-        confirm_permission=True,
-        max_pages=100,
-    )
-    adapter = JobsChAdapter()
-    try:
-        listings = adapter.fetch_jobs(target, run_cfg, http)
-    except Exception as exc:
-        logging.warning("API fetch failed (%s) — proceeding without listings", exc)
-        listings = []
-    logging.info("API listings: %d", len(listings))
-    by_url: Dict[str, JobListing] = {l.job_url: l for l in listings if l.job_url}
+    by_url: dict[str, JobListing] = {}
 
-    # 2. For every cached detail page, extract + merge into stub (or create fresh).
+    # Optionally re-run the listing adapters (served from cache) so the salvaged
+    # detail pages merge into real stubs rather than standing alone.
+    if args.merge_listings:
+        by_url.update(_listing_stubs(args.config, cache_path))
+        logging.info("listing stubs: %d", len(by_url))
+
+    enriched = fresh = skipped = 0
     conn = sqlite3.connect(cache_path)
-    enriched_count = 0
-    fresh_count = 0
-    cur = conn.execute(
-        "SELECT url, final_url, body FROM http_cache WHERE url LIKE '%/detail/%'"
-    )
-    for url, final_url, body in cur:
-        try:
-            html = zlib.decompress(body).decode("utf-8", errors="replace")
-        except Exception:
-            continue
-        if len(html) < 5000:
-            continue  # poisoned
-        extracted = extract_job_from_page(html, final_url or url)
-        if not extracted:
-            continue
-        # Match by URL — strip trailing slash for robustness
-        key = url.rstrip("/")
-        match = None
-        for k, l in by_url.items():
-            if k.rstrip("/") == key:
-                match = l
-                break
-        if match is not None:
-            match.merge(extracted)
-            enriched_count += 1
-        else:
-            extracted.source = "jobs.ch"
-            extracted.source_ats = "jobs.ch"
-            extracted.source_domain = urlparse(final_url or url).netloc
-            by_url[url] = extracted
-            fresh_count += 1
-    conn.close()
+    try:
+        rows = conn.execute("SELECT url, final_url, body FROM http_cache WHERE url LIKE ?", (args.url_like,))
+        for url, final_url, body in rows:
+            try:
+                html = zlib.decompress(body).decode("utf-8", errors="replace")
+            except (zlib.error, TypeError):
+                skipped += 1
+                continue
+            if len(html) < MIN_USEFUL_HTML:
+                skipped += 1  # truncated / WAF-poisoned entry
+                continue
 
-    logging.info("Enriched %d listings, added %d fresh from cache", enriched_count, fresh_count)
+            page_url = final_url or url
+            extracted = extract_job_from_page(html, page_url)
+            if extracted is None or not (extracted.title or extracted.description):
+                # No JSON-LD — fall back to the universal smart-DOM extractor,
+                # which the original tool never tried.
+                extracted = universal_extract(html, page_url)
+            if extracted is None or not (extracted.title or extracted.description):
+                skipped += 1
+                continue
+
+            match = _match_stub(by_url, url, final_url)
+            if match is not None:
+                match.merge(extracted)
+                enriched += 1
+            else:
+                host = urlparse(page_url).netloc
+                extracted.source = extracted.source or host
+                extracted.source_domain = extracted.source_domain or host
+                by_url[url] = extracted
+                fresh += 1
+    finally:
+        conn.close()
+
+    logging.info("enriched %d listings, recovered %d fresh, skipped %d unusable", enriched, fresh, skipped)
 
     stamp = datetime.now(timezone.utc).isoformat()
-    rows = []
-    for l in by_url.values():
-        if not l.title:
+    unique: list[JobListing] = []
+    seen: set[str] = set()
+    for listing in by_url.values():
+        if not listing.title:
             continue
-        l.scraped_at = l.scraped_at or stamp
-        l.saved_at = l.saved_at or stamp
-        if not l.source:
-            l.source = "jobs.ch"
-        rows.append(l)
-
-    # Dedupe by fingerprint
-    seen = set()
-    unique = []
-    for r in rows:
-        fp = r.fingerprint()
-        if fp in seen:
+        listing.scraped_at = listing.scraped_at or stamp
+        listing.saved_at = listing.saved_at or stamp
+        fingerprint = listing.fingerprint()
+        if fingerprint in seen:
             continue
-        seen.add(fp)
-        unique.append(r)
+        seen.add(fingerprint)
+        unique.append(listing)
 
-    with open(out_path, "w", newline="", encoding="utf-8") as fh:
-        writer = csv.DictWriter(fh, fieldnames=CSV_COLUMNS)
+    out_path = args.output or os.path.join(ROOT, "output", "salvaged.csv")
+    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+    with open(out_path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS, extrasaction="ignore")
         writer.writeheader()
-        for r in unique:
-            writer.writerow(r.to_dict())
-
+        for listing in unique:
+            writer.writerow(listing.to_dict())
     logging.info("wrote %d rows → %s", len(unique), out_path)
 
-    # Field-fill report
     if unique:
-        report_fields = [
-            "title", "company", "company_logo", "company_website", "company_industry",
-            "department", "description",
-            "responsibilities", "requirements", "qualifications", "benefits", "skills",
-            "recruiter_name", "recruiter_title", "recruiter_phone", "recruiter_email",
-            "hiring_manager", "education_required", "experience_years",
-            "salary_min", "salary_max", "salary_currency", "tech_stack",
-            "remote_type", "seniority", "employment_type", "posted_date",
-            "language", "apply_url", "raw_jsonld",
-        ]
         print("\nField-fill on final CSV:")
-        for f in report_fields:
-            n = sum(1 for r in unique if getattr(r, f, ""))
-            pct = 100 * n / len(unique)
-            print(f"  {f:22s} {n:4d}/{len(unique)} ({pct:5.1f}%)")
+        for field in REPORT_FIELDS:
+            filled = sum(1 for r in unique if getattr(r, field, ""))
+            print(f"  {field:22s} {filled:4d}/{len(unique)} ({100 * filled / len(unique):5.1f}%)")
+
+
+def _listing_stubs(config_name: str, cache_path: str) -> dict[str, JobListing]:
+    """Replay a config's listing pages from cache to rebuild the stub set."""
+    try:
+        config = load_config(resolve_config_path(config_name))
+    except (FileNotFoundError, ValueError) as exc:
+        logging.warning("could not load %s (%s) — continuing without listing stubs", config_name, exc)
+        return {}
+
+    stubs: dict[str, JobListing] = {}
+    http = HttpClient(
+        user_agent=config.run.user_agent,
+        delay_seconds=0.0,
+        obey_robots=False,
+        cache_enabled=True,
+        cache_ttl_seconds=config.run.cache_ttl_seconds,
+        cache_path=cache_path,
+        rotate_user_agents=False,
+    )
+    try:
+        for target in config.targets:
+            try:
+                for listing in get_adapter(target).fetch_jobs(target, config.run, http):
+                    if listing.job_url:
+                        listing.source = listing.source or target.name
+                        stubs[listing.job_url] = listing
+            except Exception as exc:
+                logging.warning("listing replay failed for %s: %s", target.name, exc)
+    finally:
+        http.close()
+    return stubs
+
+
+def _match_stub(by_url: dict[str, JobListing], url: str, final_url: str | None) -> JobListing | None:
+    """Find the stub for a cached page, tolerating trailing-slash differences."""
+    for candidate in (url, final_url):
+        if candidate and candidate in by_url:
+            return by_url[candidate]
+    keys = {url.rstrip("/"), (final_url or "").rstrip("/")} - {""}
+    for stub_url, stub in by_url.items():
+        if stub_url.rstrip("/") in keys:
+            return stub
+    return None
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("--cache", help="Path to http_cache.sqlite (default .cache/http_cache.sqlite)")
+    parser.add_argument("-o", "--output", help="CSV output path (default output/salvaged.csv)")
+    parser.add_argument(
+        "--url-like",
+        default="%",
+        help="SQL LIKE filter on the cached URL, e.g. '%%/detail/%%' (default: everything)",
+    )
+    parser.add_argument(
+        "--config",
+        default="example",
+        help="Config whose listing pages to replay from cache (with --merge-listings)",
+    )
+    parser.add_argument(
+        "--merge-listings",
+        action="store_true",
+        help="Replay the config's listing adapters from cache and merge details into those stubs",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":
