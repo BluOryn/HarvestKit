@@ -1,4 +1,6 @@
 // Mirror of src/general_scraper/models.py — keep field list in sync.
+import { canonicalizeUrl } from "./canonicalUrl";
+import { sha1Hex } from "./sha1";
 
 export const GENERAL_FIELDS = [
   "name",
@@ -47,14 +49,16 @@ export function emptyRecord(): GeneralRecord {
   return out;
 }
 
+/** Must stay byte-identical to `GeneralRecord.fingerprint()` in
+ *  src/general_scraper/models.py. See the note on `fingerprint()` in schema.ts. */
 export function fingerprintRecord(r: Partial<GeneralRecord>): string {
   const parts = [
-    (r.source_url || "").toLowerCase(),
+    canonicalizeUrl(r.source_url || "").toLowerCase(),
     (r.name || "").toLowerCase(),
     (r.address || "").toLowerCase(),
     (r.phone || "").toLowerCase(),
   ];
-  return parts.join("|").replace(/\s+/g, " ").trim();
+  return sha1Hex(parts.join(" | ").replace(/\s+/g, " ").trim());
 }
 
 export function mergeRecords(parts: Partial<GeneralRecord>[]): GeneralRecord {
