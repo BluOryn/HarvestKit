@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import re
 import smtplib
-import socket
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -198,7 +197,7 @@ def is_catch_all(domain: str) -> bool | None:
             server.mail("verify@example.com")
             code, _ = server.rcpt(f"{_PROBE_LOCALPART}@{domain}")
         return code in (250, 251)
-    except (smtplib.SMTPException, OSError, socket.error) as exc:
+    except (smtplib.SMTPException, OSError) as exc:
         log.debug("catch-all probe failed for %s: %s", domain, exc)
         return None
 

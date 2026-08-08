@@ -112,6 +112,7 @@ class Lead:
 
 # Guard against a field being added to the dataclass but not to LEAD_FIELDS.
 _DATACLASS_FIELDS = {f.name for f in fields(Lead)} - {"evidence"}
-assert _DATACLASS_FIELDS == set(
-    LEAD_FIELDS
-), f"LEAD_FIELDS out of sync with the dataclass: {_DATACLASS_FIELDS ^ set(LEAD_FIELDS)}"
+_DECLARED_FIELDS = set(LEAD_FIELDS)
+assert (
+    _DATACLASS_FIELDS == _DECLARED_FIELDS
+), f"LEAD_FIELDS out of sync with the dataclass: {_DATACLASS_FIELDS ^ _DECLARED_FIELDS}"

@@ -8,16 +8,16 @@ from leadgen.score.quota import select
 
 
 def _lead(**kwargs) -> Lead:
-    base = dict(
-        person_name="Jane Doe",
-        person_role="CTO",
-        person_role_family="tech_leadership",
-        person_email="j.doe@acme.de",
-        email_status="verified",
-        company_name="Acme",
-        company_domain="acme.de",
-        company_country="DE",
-    )
+    base = {
+        "person_name": "Jane Doe",
+        "person_role": "CTO",
+        "person_role_family": "tech_leadership",
+        "person_email": "j.doe@acme.de",
+        "email_status": "verified",
+        "company_name": "Acme",
+        "company_domain": "acme.de",
+        "company_country": "DE",
+    }
     base.update(kwargs)
     return Lead(**base)
 
