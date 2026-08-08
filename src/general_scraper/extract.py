@@ -6,29 +6,53 @@ Three strategies (merged longer-string-wins):
   3. OpenGraph + meta tags.
   4. Heuristics (regex over body text + repeated structural cards).
 """
+
 from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, Iterable, List, Optional
+from collections.abc import Iterable
+from contextlib import suppress
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, Tag
 
-from .models import GENERAL_FIELDS, GeneralRecord
-
+from .models import GeneralRecord
 
 BUSINESS_TYPES = {
-    "localbusiness", "restaurant", "store", "shop", "hotel", "lodging", "place",
-    "medicalbusiness", "medicalclinic", "physician", "dentist", "hospital",
-    "automotivebusiness", "foodestablishment", "barorpub", "cafeorcoffeeshop",
-    "professionalservice", "homeandconstructionbusiness", "financialservice",
-    "legalservice", "healthandbeautybusiness", "sportsclub", "travelagency",
-    "library", "museum", "park", "stadiumorarena", "civicstructure",
+    "localbusiness",
+    "restaurant",
+    "store",
+    "shop",
+    "hotel",
+    "lodging",
+    "place",
+    "medicalbusiness",
+    "medicalclinic",
+    "physician",
+    "dentist",
+    "hospital",
+    "automotivebusiness",
+    "foodestablishment",
+    "barorpub",
+    "cafeorcoffeeshop",
+    "professionalservice",
+    "homeandconstructionbusiness",
+    "financialservice",
+    "legalservice",
+    "healthandbeautybusiness",
+    "sportsclub",
+    "travelagency",
+    "library",
+    "museum",
+    "park",
+    "stadiumorarena",
+    "civicstructure",
 }
 
 
-def extract_record_from_page(html: str, page_url: str) -> Optional[GeneralRecord]:
+def extract_record_from_page(html: str, page_url: str) -> GeneralRecord | None:
     soup = BeautifulSoup(html, "lxml")
     rec = GeneralRecord()
     rec.source_url = page_url
@@ -54,16 +78,21 @@ def extract_record_from_page(html: str, page_url: str) -> Optional[GeneralRecord
     return rec
 
 
-def extract_listing_cards(html: str, page_url: str, selectors: Optional[Dict[str, str]] = None) -> List[GeneralRecord]:
+def extract_listing_cards(
+    html: str, page_url: str, selectors: dict[str, str] | None = None
+) -> list[GeneralRecord]:
     """Extract a list of records from a search/listing page.
 
     If `selectors` is provided (from config), uses CSS selectors. Otherwise
     falls back to JSON-LD ItemList + repeated-card heuristics.
     """
     soup = BeautifulSoup(html, "lxml")
-    out: List[GeneralRecord] = []
+    out: list[GeneralRecord] = []
     if selectors and selectors.get("card"):
-        cards = soup.select(selectors["card"])
+        try:
+            cards = soup.select(selectors["card"])
+        except Exception as exc:
+            raise ValueError(f"invalid `card` selector {selectors['card']!r}: {exc}") from exc
         for c in cards:
             r = _record_from_card(c, page_url, selectors)
             if r and r.name:
@@ -92,9 +121,12 @@ def extract_listing_cards(html: str, page_url: str, selectors: Optional[Dict[str
     return out
 
 
-def _record_from_card(card: Tag, page_url: str, selectors: Dict[str, str]) -> Optional[GeneralRecord]:
+def _record_from_card(card: Tag, page_url: str, selectors: dict[str, str]) -> GeneralRecord | None:
     rec = GeneralRecord(source_listing_url=page_url, source_domain=urlparse(page_url).netloc)
-    pick = lambda key: _pick(card, selectors.get(key))
+
+    def pick(key: str) -> str:
+        return _pick(card, selectors.get(key))
+
     rec.name = pick("title") or pick("name") or ""
     rec.address = pick("address") or ""
     rec.city = pick("city") or ""
@@ -107,28 +139,50 @@ def _record_from_card(card: Tag, page_url: str, selectors: Dict[str, str]) -> Op
     rec.image = pick("image") or ""
     url_sel = selectors.get("url")
     if url_sel:
-        a = card.select_one(url_sel)
-        if a:
-            href = a.get("href") if a.has_attr("href") else None
-            if href:
-                rec.source_url = urljoin(page_url, href)
+        try:
+            a = card.select_one(url_sel)
+        except Exception:
+            a = None
+        href = _attr(a, "href")
+        if href and not href.startswith(("javascript:", "#")):
+            rec.source_url = urljoin(page_url, href)
     return rec if rec.name else None
 
 
-def _pick(card: Tag, selector: Optional[str]) -> str:
+def _pick(card: Tag, selector: str | None) -> str:
     if not selector:
         return ""
-    el = card.select_one(selector)
+    try:
+        el = card.select_one(selector)
+    except Exception:
+        # A malformed selector in a user config must not abort the whole run.
+        return ""
     if not el:
         return ""
     if el.has_attr("content"):
-        return el["content"].strip()
+        return _attr(el, "content")
     if el.name == "img" and el.has_attr("src"):
-        return el["src"].strip()
-    return el.get_text(" ", strip=True)
+        return _attr(el, "src")
+    if el.name in ("meta", "link"):
+        return _attr(el, "content") or _attr(el, "href")
+    # aria-label carries the value for star-rating widgets ("4.5 star rating").
+    text = el.get_text(" ", strip=True)
+    return text or _attr(el, "aria-label") or _attr(el, "title")
 
 
-def _iter_json_ld(soup: BeautifulSoup) -> Iterable[Dict[str, Any]]:
+def _attr(el: Any, name: str) -> str:
+    """Read an attribute as a string; bs4 returns a list for multi-valued attrs."""
+    if el is None:
+        return ""
+    value = el.get(name)
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return " ".join(str(v) for v in value).strip()
+    return str(value).strip()
+
+
+def _iter_json_ld(soup: BeautifulSoup) -> Iterable[dict[str, Any]]:
     for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
         text = script.string or script.get_text(strip=False)
         if not text:
@@ -158,9 +212,9 @@ def _flatten(data: Any) -> Iterable[Any]:
         yield data
 
 
-def _is_business(item: Dict[str, Any]) -> bool:
+def _is_business(item: dict[str, Any]) -> bool:
     t = item.get("@type")
-    types: List[str] = []
+    types: list[str] = []
     if isinstance(t, list):
         types = [str(x).lower() for x in t]
     elif t is not None:
@@ -168,7 +222,7 @@ def _is_business(item: Dict[str, Any]) -> bool:
     return any(typ in BUSINESS_TYPES or "business" in typ for typ in types)
 
 
-def _apply_jsonld(rec: GeneralRecord, item: Dict[str, Any]) -> None:
+def _apply_jsonld(rec: GeneralRecord, item: dict[str, Any]) -> None:
     rec.name = rec.name or _str(item.get("name") or item.get("legalName"))
     rec.description = rec.description or _str(item.get("description"))
     rec.image = rec.image or _str(_first_url(item.get("image")))
@@ -245,23 +299,27 @@ def _apply_jsonld(rec: GeneralRecord, item: Dict[str, Any]) -> None:
         rec.social_links = rec.social_links or same_as
 
     if not rec.raw_jsonld:
-        try:
-            rec.raw_jsonld = json.dumps(item, ensure_ascii=False)[:8000]
-        except Exception:
-            pass
+        with suppress(TypeError, ValueError):
+            rec.raw_jsonld = json.dumps(item, ensure_ascii=False, default=str)[:8000]
 
 
 def _apply_microdata(rec: GeneralRecord, soup: BeautifulSoup) -> None:
-    root = soup.find(attrs={"itemtype": re.compile(r"schema\.org/(LocalBusiness|Restaurant|Place|Store|Organization)", re.I)})
+    root = soup.find(
+        attrs={
+            "itemtype": re.compile(r"schema\.org/(LocalBusiness|Restaurant|Place|Store|Organization)", re.I)
+        }
+    )
     if not root or not isinstance(root, Tag):
         return
+
     def get_prop(name: str) -> str:
         el = root.find(attrs={"itemprop": name})
         if not el:
             return ""
         if el.has_attr("content"):
-            return el["content"]
+            return _attr(el, "content")
         return el.get_text(" ", strip=True)
+
     rec.name = rec.name or get_prop("name")
     rec.phone = rec.phone or get_prop("telephone")
     rec.description = rec.description or get_prop("description")
@@ -270,9 +328,8 @@ def _apply_microdata(rec: GeneralRecord, soup: BeautifulSoup) -> None:
 def _apply_opengraph(rec: GeneralRecord, soup: BeautifulSoup) -> None:
     def og(name: str) -> str:
         el = soup.find("meta", attrs={"property": name}) or soup.find("meta", attrs={"name": name})
-        if el and el.get("content"):
-            return el["content"].strip()
-        return ""
+        return _attr(el, "content")
+
     rec.name = rec.name or og("og:title")
     rec.description = rec.description or og("og:description") or og("description")
     rec.image = rec.image or og("og:image")
@@ -295,10 +352,12 @@ def _apply_heuristics(rec: GeneralRecord, soup: BeautifulSoup) -> None:
             rec.email = m.group(0)
 
 
-def _heuristic_card_extract(soup: BeautifulSoup, page_url: str) -> List[GeneralRecord]:
+def _heuristic_card_extract(soup: BeautifulSoup, page_url: str) -> list[GeneralRecord]:
     """Find repeating siblings that look like business cards (have name + address/phone)."""
-    out: List[GeneralRecord] = []
-    candidates = soup.select("li, article, div[class*='result'], div[class*='card'], div[class*='listing'], div[class*='business']")
+    out: list[GeneralRecord] = []
+    candidates = soup.select(
+        "li, article, div[class*='result'], div[class*='card'], div[class*='listing'], div[class*='business']"
+    )
     for c in candidates:
         # Must have a heading and either an address-like line or a phone.
         h = c.select_one("h1, h2, h3, h4, [class*='title'], [class*='name']")

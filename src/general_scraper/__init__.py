@@ -13,7 +13,8 @@ Mirrors the architecture of `job_scraper`:
 Driven by the same config.yaml, with an additional `mode: general` and `selectors:`
 block per target so users can scrape any structured listing page declaratively.
 """
-from .models import GENERAL_CSV_COLUMNS, GENERAL_FIELDS, GeneralRecord
+
 from .extract import extract_record_from_page
+from .models import GENERAL_CSV_COLUMNS, GENERAL_FIELDS, GeneralRecord
 
 __all__ = ["GENERAL_CSV_COLUMNS", "GENERAL_FIELDS", "GeneralRecord", "extract_record_from_page"]

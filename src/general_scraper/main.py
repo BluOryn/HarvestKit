@@ -3,92 +3,92 @@
 Workflow per target:
   1. Render listing page (HTTP or Playwright if `use_playwright: true`).
   2. Extract cards via config selectors / JSON-LD ItemList / heuristics.
-  3. Paginate via config-supplied `next_page` selector or `?page=N` rewriter.
+  3. Paginate via config-supplied `selector`, a `param`+`step` rewriter, or
+     `<link rel=next>`.
   4. Deep-scrape each detail URL → JSON-LD LocalBusiness extraction + heuristics.
   5. Dedupe + export to CSV.
 
-Config example (YAML):
-  mode: general
-  run:
-    confirm_permission: true
-    use_playwright: true   # required for JS-heavy sites like Yelp
-  targets:
-    - name: yelp-clinics-chicago
-      url: https://www.yelp.com/search?find_desc=Clinics&find_loc=Chicago%2C+IL
-      pagination:
-        param: start
-        step: 10
-        max_pages: 5
-      selectors:
-        card: "div[class*='businessName']"
-        title: "a"
-        url: "a"
-        address: "span[class*='secondaryAttributes']"
-        phone: "[class*='phone']"
-        rating: "div[role='img'][aria-label*='star']"
+See configs/general.example.yaml for a worked example.
 """
+
 from __future__ import annotations
 
 import argparse
 import csv
 import logging
 import os
+import sys
+from contextlib import suppress
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse, urlencode, parse_qsl
+from typing import Optional
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
-import yaml
+# Reuse the job_scraper HTTP client + Playwright fetcher — same machinery.
+from job_scraper.crawl import PlaywrightFetcher
+from job_scraper.http import HttpClient
 
+from .config import (
+    GeneralAppConfig,
+    GeneralTargetConfig,
+    PaginationConfig,
+    load_general_config,
+    resolve_config_path,
+)
 from .extract import extract_listing_cards, extract_record_from_page
 from .models import GENERAL_CSV_COLUMNS, GeneralRecord
 
+DEFAULT_CONFIG = "general.example.yaml"
 
-# Reuse the job_scraper HTTP client + Playwright fetcher — same machinery.
-from job_scraper.http import HttpClient
-from job_scraper.crawl import PlaywrightFetcher
-from job_scraper.deep_scrape import _HostThrottle  # internal import — same mechanism
+FetchResult = Optional[tuple[str, str]]
 
 
 def main() -> None:
     args = _parse_args()
-    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO), format="%(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=getattr(logging, args.log_level.upper(), logging.INFO),
+        format="%(levelname)s: %(message)s",
+    )
 
-    raw = _load_yaml(args.config)
-    if (raw.get("mode") or "").lower() != "general" and not args.force:
-        logging.error("Config mode is not 'general'. Set mode: general or pass --force.")
-        return
+    try:
+        path = resolve_config_path(args.config)
+        config = load_general_config(path)
+    except FileNotFoundError as exc:
+        logging.error("%s", exc)
+        sys.exit(2)
+    except ValueError as exc:
+        logging.error("Invalid config %s: %s", args.config, exc)
+        sys.exit(2)
 
-    run_cfg = raw.get("run", {}) or {}
-    if not run_cfg.get("confirm_permission") and not args.confirm_permission:
-        logging.error("Confirm permission to scrape via run.confirm_permission: true or --confirm-permission.")
-        return
+    if not config.run.confirm_permission and not args.confirm_permission:
+        logging.error(
+            "Confirm permission to scrape via run.confirm_permission: true or --confirm-permission."
+        )
+        sys.exit(2)
+
+    if not config.targets:
+        logging.error("No targets in %s.", path)
+        sys.exit(2)
 
     http = HttpClient(
-        user_agent=run_cfg.get("user_agent", "GeneralScraperBot/1.0 (+hriday.vig@bluoryn.com)"),
-        delay_seconds=run_cfg.get("delay_seconds", 1.0),
-        obey_robots=run_cfg.get("obey_robots", True),
-        cache_enabled=run_cfg.get("cache_enabled", True),
-        cache_ttl_seconds=run_cfg.get("cache_ttl_seconds", 86400),
-        cache_path=run_cfg.get("cache_path", ".cache/general_http_cache.sqlite"),
-        rotate_user_agents=run_cfg.get("rotate_user_agents", True),
+        user_agent=config.run.user_agent,
+        delay_seconds=config.run.delay_seconds,
+        obey_robots=config.run.obey_robots,
+        cache_enabled=config.run.cache_enabled,
+        cache_ttl_seconds=config.run.cache_ttl_seconds,
+        cache_path=config.run.cache_path,
+        rotate_user_agents=config.run.rotate_user_agents,
     )
-    use_playwright = run_cfg.get("use_playwright", False)
 
-    targets = raw.get("targets", []) or []
-    if not targets:
-        logging.error("No targets in config.")
-        return
-
-    output_path = (raw.get("exports", {}).get("csv", {}) or {}).get("path", "output/general.csv")
+    output_path = args.output or config.csv.path
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    all_records: List[GeneralRecord] = []
+    all_records: list[GeneralRecord] = []
     seen_ids = set()
 
-    pw: Optional[PlaywrightFetcher] = None
-    if use_playwright:
+    pw: PlaywrightFetcher | None = None
+    if config.run.use_playwright:
         try:
             pw = PlaywrightFetcher().__enter__()
         except Exception as exc:
@@ -96,161 +96,159 @@ def main() -> None:
             pw = None
 
     try:
-        for target in targets:
-            name = target.get("name") or urlparse(target.get("url", "")).netloc
-            url = target.get("url", "")
-            if not url:
-                continue
-            selectors = target.get("selectors") or {}
-            pagination = target.get("pagination") or {}
-            target_use_pw = target.get("use_playwright", use_playwright)
+        for target in config.targets:
+            use_pw = config.run.use_playwright if target.use_playwright is None else target.use_playwright
+            fetcher = pw if (use_pw and pw is not None) else None
 
-            cards = _collect_cards(
-                start_url=url,
-                http=http,
-                playwright=pw if target_use_pw else None,
-                selectors=selectors,
-                pagination=pagination,
-                max_pages=int(pagination.get("max_pages") or run_cfg.get("max_pages") or 5),
-            )
-            logging.info("%s: found %d cards", name, len(cards))
+            max_pages = target.pagination.max_pages or config.run.max_pages
+            cards = _collect_cards(target, http, fetcher, max_pages)
+            logging.info("%s: found %d cards", target.name, len(cards))
 
-            # Deep-scrape each detail URL
-            deep_cfg = run_cfg.get("deep_scrape", True)
-            if deep_cfg:
-                for c in cards:
-                    if not c.source_url:
-                        continue
-                    fetched = _fetch(c.source_url, http, pw if target_use_pw else None)
-                    if fetched is None:
-                        continue
-                    final_url, html = fetched
-                    detail = extract_record_from_page(html, final_url)
-                    if detail:
-                        c.merge(detail)
+            if config.run.deep_scrape:
+                _deep_scrape(cards, http, fetcher)
 
             stamp = datetime.now(timezone.utc).isoformat()
-            for c in cards:
-                c.scraped_at = c.scraped_at or stamp
-                c.source = name
-                fp = c.fingerprint()
-                if fp in seen_ids:
+            for card in cards:
+                card.scraped_at = card.scraped_at or stamp
+                card.source = target.name
+                fingerprint = card.fingerprint()
+                if fingerprint in seen_ids:
                     continue
-                seen_ids.add(fp)
-                all_records.append(c)
+                seen_ids.add(fingerprint)
+                all_records.append(card)
     finally:
         if pw is not None:
-            try:
+            with suppress(Exception):
                 pw.__exit__(None, None, None)
-            except Exception:
-                pass
+        http.close()
 
     saved = datetime.now(timezone.utc).isoformat()
-    for r in all_records:
-        r.saved_at = r.saved_at or saved
+    for record in all_records:
+        record.saved_at = record.saved_at or saved
 
-    _write_csv(output_path, all_records)
-    logging.info("Wrote %d records to %s", len(all_records), output_path)
+    if config.csv.enabled:
+        _write_csv(output_path, all_records)
+        logging.info("Wrote %d records to %s", len(all_records), output_path)
+    else:
+        logging.info("Collected %d records (csv export disabled)", len(all_records))
+
+
+def _deep_scrape(cards: list[GeneralRecord], http: HttpClient, fetcher: PlaywrightFetcher | None) -> None:
+    for card in cards:
+        if not card.source_url:
+            continue
+        fetched = _fetch(card.source_url, http, fetcher)
+        if fetched is None:
+            continue
+        final_url, html = fetched
+        detail = extract_record_from_page(html, final_url)
+        if detail:
+            card.merge(detail)
 
 
 def _collect_cards(
-    start_url: str,
+    target: GeneralTargetConfig,
     http: HttpClient,
-    playwright: Optional[PlaywrightFetcher],
-    selectors: Dict[str, Any],
-    pagination: Dict[str, Any],
+    fetcher: PlaywrightFetcher | None,
     max_pages: int,
-) -> List[GeneralRecord]:
-    cards: List[GeneralRecord] = []
+) -> list[GeneralRecord]:
+    cards: list[GeneralRecord] = []
     seen_urls = set()
+    seen_pages = set()
 
     pages_done = 0
-    current_url = start_url
-    while current_url and pages_done < max_pages:
-        fetched = _fetch(current_url, http, playwright)
+    current_url: str | None = target.url
+    while current_url and pages_done < max(1, max_pages):
+        # A pagination rule that returns a URL we already fetched (a "next" link
+        # pointing at the current page) would otherwise loop until max_pages.
+        if current_url in seen_pages:
+            break
+        seen_pages.add(current_url)
+
+        fetched = _fetch(current_url, http, fetcher)
         if fetched is None:
             break
         final_url, html = fetched
-        page_cards = extract_listing_cards(html, final_url, selectors=selectors if selectors.get("card") else None)
+        page_cards = extract_listing_cards(html, final_url, selectors=target.selectors or None)
         new = 0
-        for c in page_cards:
-            key = c.source_url or c.name
-            if key in seen_urls:
+        for card in page_cards:
+            key = card.source_url or card.name
+            if not key or key in seen_urls:
                 continue
             seen_urls.add(key)
-            cards.append(c)
+            cards.append(card)
             new += 1
         pages_done += 1
         if new == 0:
             break
-        current_url = _next_page_url(html, final_url, pagination)
+        current_url = _next_page_url(html, final_url, target.pagination)
     return cards
 
 
-def _next_page_url(html: str, base_url: str, pagination: Dict[str, Any]) -> Optional[str]:
-    if not pagination:
-        # Try <link rel="next">
-        soup = BeautifulSoup(html, "lxml")
-        link_next = soup.find("link", rel=lambda v: v and "next" in (v if isinstance(v, list) else [v]))
-        if link_next and link_next.get("href"):
-            from urllib.parse import urljoin
-            return urljoin(base_url, link_next["href"])
-        a_next = soup.select_one("a[rel='next'], a[aria-label*='next' i]")
-        if a_next and a_next.get("href"):
-            from urllib.parse import urljoin
-            return urljoin(base_url, a_next["href"])
-        return None
-
-    # Config-driven param-based pagination
-    if pagination.get("param"):
-        param = pagination["param"]
-        step = int(pagination.get("step") or 1)
+def _next_page_url(html: str, base_url: str, pagination: PaginationConfig) -> str | None:
+    if pagination.param:
         parsed = urlparse(base_url)
-        qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query = dict(parse_qsl(parsed.query, keep_blank_values=True))
         try:
-            cur = int(qs.get(param, "0") or 0)
+            current = int(query.get(pagination.param, "0") or 0)
         except ValueError:
-            cur = 0
-        qs[param] = str(cur + step)
-        return parsed._replace(query=urlencode(qs, doseq=True)).geturl()
+            current = 0
+        query[pagination.param] = str(current + max(1, pagination.step))
+        return parsed._replace(query=urlencode(query, doseq=True)).geturl()
 
-    if pagination.get("selector"):
-        soup = BeautifulSoup(html, "lxml")
-        a = soup.select_one(pagination["selector"])
-        if a and a.get("href"):
-            from urllib.parse import urljoin
-            return urljoin(base_url, a["href"])
+    soup = BeautifulSoup(html, "lxml")
+
+    if pagination.selector:
+        anchor = soup.select_one(pagination.selector)
+        href = anchor.get("href") if anchor else None
+        return urljoin(base_url, href) if href else None
+
+    link_next = soup.find("link", rel=lambda v: bool(v) and "next" in (v if isinstance(v, list) else [v]))
+    if link_next and link_next.get("href"):
+        return urljoin(base_url, link_next["href"])
+    a_next = soup.select_one("a[rel='next'], a[aria-label*='next' i]")
+    if a_next and a_next.get("href"):
+        return urljoin(base_url, a_next["href"])
     return None
 
 
-def _fetch(url: str, http: HttpClient, playwright: Optional[PlaywrightFetcher]):
-    if playwright is not None:
-        result = playwright.get(url)
+def _fetch(url: str, http: HttpClient, fetcher: PlaywrightFetcher | None) -> FetchResult:
+    if fetcher is not None:
+        result = fetcher.get(url)
         if result is not None:
             return result
     return http.get(url, allow_404=True)
 
 
-def _write_csv(path: str, records: List[GeneralRecord]) -> None:
+def _write_csv(path: str, records: list[GeneralRecord]) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=GENERAL_CSV_COLUMNS)
         writer.writeheader()
-        for r in records:
-            writer.writerow(r.to_dict())
-
-
-def _load_yaml(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as h:
-        return yaml.safe_load(h) or {}
+        for record in records:
+            writer.writerow(record.to_dict())
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="General-purpose web scraper (businesses, listings)")
-    p.add_argument("--config", default="config.general.yaml", help="Path to config file")
-    p.add_argument("--confirm-permission", action="store_true")
-    p.add_argument("--force", action="store_true", help="Run even if mode != general")
-    p.add_argument("--log-level", default="INFO")
-    return p.parse_args()
+    parser = argparse.ArgumentParser(description="HarvestKit general-purpose scraper (businesses, listings)")
+    parser.add_argument(
+        "--config",
+        default=DEFAULT_CONFIG,
+        help="Config name or path; bare names are looked up under configs/",
+    )
+    parser.add_argument("-o", "--output", help="CSV output path (overrides exports.csv.path)")
+    parser.add_argument("--confirm-permission", action="store_true")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Deprecated — general mode no longer requires `mode: general`",
+    )
+    parser.add_argument("--log-level", default="INFO")
+    return parser.parse_args()
+
+
+# Re-exported so `from general_scraper.main import GeneralAppConfig` keeps working.
+__all__ = ["GeneralAppConfig", "main"]
 
 
 if __name__ == "__main__":
