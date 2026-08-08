@@ -11,7 +11,7 @@
 # Excluded: jobbnorge.no (SPA, needs Playwright), webcruiter (SPA, needs Playwright)
 
 run:
-  user_agent: "HarvestKitBot/1.0 (+hriday.vig@bluoryn.com)"
+  user_agent: "HarvestKitBot/1.0 (+https://github.com/BluOryn/HarvestKit)"
   delay_seconds: 0.3
   max_pages: 30
   obey_robots: false

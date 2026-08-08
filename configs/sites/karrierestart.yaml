@@ -1,5 +1,5 @@
 run:
-  user_agent: "HarvestKitBot/1.0 (+hriday.vig@bluoryn.com)"
+  user_agent: "HarvestKitBot/1.0 (+https://github.com/BluOryn/HarvestKit)"
   delay_seconds: 0.3
   max_pages: 1
   obey_robots: false
@@ -13,11 +13,11 @@ run:
   rotate_user_agents: true
 
 targets:
-  - name: nav-smoketest
-    url: "https://arbeidsplassen.nav.no/stillinger?q=utvikler"
-    adapter: nav.no
+  - name: karrierestart-smoke
+    url: "https://karrierestart.no/jobb/"
+    adapter: karrierestart.no
 
 exports:
   csv:
     enabled: true
-    path: "output/nav_smoketest.csv"
+    path: "output/karrierestart_smoke.csv"

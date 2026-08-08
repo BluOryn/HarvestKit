@@ -15,3 +15,6 @@ coverage.xml
 *.log
 *.csv
 proxies.txt
+configs/local
+configs/**/*.local.yaml
+configs/**/*.private.yaml

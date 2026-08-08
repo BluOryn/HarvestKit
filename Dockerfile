@@ -1,6 +1,11 @@
 # HarvestKit — Python CLI image with Playwright + Chromium baked in.
 # Build:   docker build -t harvestkit:local .
-# Run:     docker run --rm -v $(pwd)/output:/app/output -v $(pwd)/configs:/app/configs harvestkit:local --config /app/configs/config.example.yaml
+# Run:     docker run --rm -v "$(pwd)/output:/app/output" harvestkit:local --config example
+#          docker run --rm -v "$(pwd)/configs:/app/configs" -v "$(pwd)/output:/app/output" \
+#                     harvestkit:local --config norway-big
+#
+# The bundled configs/ tree ships in the image, so `--config example` works with
+# no mount. Mount your own configs/ over /app/configs to use private ones.
 #
 # Image is ~1.2 GB (Playwright + Chromium account for ~500 MB).
 # For a slim build without Playwright, use the `slim` stage:
@@ -21,14 +26,17 @@ RUN apt-get update \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml requirements.txt ./
+COPY pyproject.toml requirements.txt README.md LICENSE ./
 COPY src ./src
 COPY run.py ./
 
 RUN pip install -e ".[exports,llm]"
 
-# Default config dir for mounted volume
-RUN mkdir -p /app/configs /app/output /app/.cache
+# Ship the reference configs so `--config example` works without a mount;
+# a bind-mount at /app/configs simply shadows them.
+COPY configs ./configs
+
+RUN mkdir -p /app/output /app/.cache
 
 ENTRYPOINT ["python", "run.py"]
 CMD ["--help"]
