@@ -14,24 +14,39 @@ Design:
     can't render). The HttpClient itself doesn't render JS — sites that require it
     must set `target.use_playwright: true` or be invoked through PlaywrightFetcher.
 """
+
 from __future__ import annotations
 
 import logging
 import random
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 from .extract import extract_job_from_page
-from .http import HttpClient
+from .http import HostThrottle, HttpClient
 from .models import JobListing
-from .universal import universal_extract, mine_contacts
+from .universal import mine_contacts, universal_extract
+
+# Playwright's sync API is bound to the greenlet that created it — calling
+# .get() from two ThreadPoolExecutor workers raises
+# "Playwright Sync API inside asyncio/another thread". Every deep-scrape worker
+# shares one fetcher, so serialize access behind a module-level lock.
+_PLAYWRIGHT_LOCK = threading.Lock()
 
 
-def _country_hint(url: str) -> Optional[str]:
+def _playwright_get(fetcher: object, url: str) -> tuple[str, str] | None:
+    """Thread-safe wrapper around PlaywrightFetcher.get()."""
+    if fetcher is None:
+        return None
+    with _PLAYWRIGHT_LOCK:
+        return fetcher.get(url)  # type: ignore[attr-defined]
+
+
+def _country_hint(url: str) -> str | None:
     """Best-effort country guess from URL/TLD. Drives phone-regex selection."""
     host = urlparse(url).netloc.lower()
     if host.endswith(".no") or "nav.no" in host:
@@ -49,6 +64,16 @@ def _country_hint(url: str) -> Optional[str]:
     return None
 
 
+# Hosts whose critical fields (contact block, description) only exist after
+# client-side JS runs. When Playwright is available we re-render these even if
+# the plain HTTP fetch succeeded. Override via DeepScrapeConfig.playwright_hosts.
+DEFAULT_PLAYWRIGHT_HOSTS: tuple[str, ...] = (
+    "karrierestart.no",
+    "candidate.webcruiter.com",
+    "jobbnorge.no",
+)
+
+
 @dataclass
 class DeepScrapeConfig:
     concurrency: int = 6
@@ -57,6 +82,7 @@ class DeepScrapeConfig:
     max_retries: int = 2
     use_playwright_fallback: bool = False
     playwright_after_failures: int = 1  # retry with playwright after N normal failures
+    playwright_hosts: tuple[str, ...] = DEFAULT_PLAYWRIGHT_HOSTS
     progress_every: int = 25
     # LLM-fallback (Anthropic Haiku) — auto-learn selectors for unknown hosts
     llm_fallback_enabled: bool = False
@@ -68,42 +94,13 @@ class DeepScrapeConfig:
     llm_monthly_budget_usd: float = 5.0
 
 
-class _HostThrottle:
-    """Token-bucket-ish throttle: per-host inflight cap + min delay between launches."""
-
-    def __init__(self, max_inflight: int, min_delay: float) -> None:
-        self.max_inflight = max(1, max_inflight)
-        self.min_delay = max(0.0, min_delay)
-        self._lock = threading.Lock()
-        self._cv = threading.Condition(self._lock)
-        self._inflight: Dict[str, int] = {}
-        self._last: Dict[str, float] = {}
-
-    def acquire(self, host: str) -> None:
-        with self._cv:
-            while True:
-                inflight = self._inflight.get(host, 0)
-                last = self._last.get(host, 0.0)
-                wait = self.min_delay - (time.time() - last)
-                if inflight < self.max_inflight and wait <= 0:
-                    self._inflight[host] = inflight + 1
-                    self._last[host] = time.time()
-                    return
-                self._cv.wait(timeout=max(0.05, wait))
-
-    def release(self, host: str) -> None:
-        with self._cv:
-            self._inflight[host] = max(0, self._inflight.get(host, 0) - 1)
-            self._cv.notify_all()
-
-
 def deep_scrape_jobs(
-    listings: List[JobListing],
+    listings: list[JobListing],
     http: HttpClient,
-    config: Optional[DeepScrapeConfig] = None,
-    on_progress: Optional[Callable[[int, int, int], None]] = None,
-    playwright_fetcher: Optional[object] = None,
-) -> List[JobListing]:
+    config: DeepScrapeConfig | None = None,
+    on_progress: Callable[[int, int, int], None] | None = None,
+    playwright_fetcher: object | None = None,
+) -> list[JobListing]:
     """Visit each listing's detail URL and merge in richer fields.
 
     Args:
@@ -120,12 +117,12 @@ def deep_scrape_jobs(
     if not listings:
         return listings
 
-    throttle = _HostThrottle(cfg.per_host_concurrency, cfg.per_host_delay_seconds)
+    throttle = HostThrottle(cfg.per_host_concurrency, cfg.per_host_delay_seconds)
     done = ok = failed = 0
     progress_lock = threading.Lock()
     total = len(listings)
 
-    def _scrape_one(listing: JobListing) -> Tuple[bool, str]:
+    def _scrape_one(listing: JobListing) -> tuple[bool, str]:
         url = listing.job_url or listing.apply_url
         if not url:
             return False, "no-url"
@@ -149,17 +146,15 @@ def deep_scrape_jobs(
                     # Pass 0: For sites that hide critical fields behind client-side
                     # JS (e.g. karrierestart contact block), re-fetch with Playwright
                     # and use its HTML for the rest of the pipeline.
+                    final_host = urlparse(final_url).netloc.lower()
                     needs_js = (
                         cfg.use_playwright_fallback
                         and playwright_fetcher is not None
-                        and (
-                            "karrierestart.no" in final_url
-                            or "candidate.webcruiter.com" in final_url
-                        )
+                        and any(h in final_host for h in cfg.playwright_hosts)
                     )
                     if needs_js:
                         try:
-                            pw_result = playwright_fetcher.get(final_url)  # type: ignore[attr-defined]
+                            pw_result = _playwright_get(playwright_fetcher, final_url)
                             if pw_result is not None:
                                 _, pw_html = pw_result
                                 if pw_html and len(pw_html) > len(html) * 0.7:
@@ -196,8 +191,11 @@ def deep_scrape_jobs(
                         if cfg.llm_fallback_enabled:
                             try:
                                 from .llm_adapter import llm_enrich
+
                                 llm_enrich(
-                                    html, final_url, listing,
+                                    html,
+                                    final_url,
+                                    listing,
                                     api_key=cfg.llm_api_key,
                                     model=cfg.llm_model,
                                     min_fields=cfg.llm_min_fields,
@@ -214,14 +212,17 @@ def deep_scrape_jobs(
             else:
                 last_err = "http-fail"
             # Exponential backoff with full jitter (AWS guidance):
-            # waits 1-2s, 2-4s, 4-8s, 8-16s, capped at 20s.
-            base = min(20.0, 2.0 * (2 ** attempt))
-            time.sleep(random.uniform(base / 2, base))
+            # waits 1-2s, 2-4s, 4-8s, capped at 20s. Skipped after the final
+            # attempt — sleeping there delays the Playwright escalation and the
+            # worker slot for up to 16s per listing while changing nothing.
+            if attempt < cfg.max_retries:
+                base = min(20.0, 2.0 * (2**attempt))
+                time.sleep(random.uniform(base / 2, base))
 
         # Optional: escalate to Playwright for known-JS sites
         if cfg.use_playwright_fallback and playwright_fetcher is not None:
             try:
-                pw_result = playwright_fetcher.get(url)  # type: ignore[attr-defined]
+                pw_result = _playwright_get(playwright_fetcher, url)
             except Exception as exc:
                 last_err = f"playwright-error:{exc}"
                 pw_result = None

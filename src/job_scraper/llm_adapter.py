@@ -7,17 +7,17 @@ calling LLM. Budget capped per month.
 Required: pip install anthropic. Set ANTHROPIC_API_KEY env var, or pass
 llm_api_key in YAML config under `run`.
 """
+
 from __future__ import annotations
 
-import datetime as dt
 import json
 import logging
 import os
 import re
 import sqlite3
 import threading
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from contextlib import suppress
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -25,15 +25,43 @@ from bs4 import BeautifulSoup
 from .models import JobListing
 
 
+def _utc_now() -> datetime:
+    """Timezone-aware UTC now. `datetime.utcnow()` is deprecated in 3.12."""
+    return datetime.now(timezone.utc)
+
+
 FIELDS = [
-    "title", "company", "location", "city", "country",
-    "employment_type", "seniority", "department", "company_industry",
-    "salary_min", "salary_max", "salary_currency", "salary_period",
-    "posted_date", "valid_through", "start_date",
-    "application_email", "application_phone", "apply_url",
-    "recruiter_name", "recruiter_email", "recruiter_phone", "recruiter_title",
-    "responsibilities", "requirements", "qualifications", "benefits",
-    "tech_stack", "skills", "language", "remote_type",
+    "title",
+    "company",
+    "location",
+    "city",
+    "country",
+    "employment_type",
+    "seniority",
+    "department",
+    "company_industry",
+    "salary_min",
+    "salary_max",
+    "salary_currency",
+    "salary_period",
+    "posted_date",
+    "valid_through",
+    "start_date",
+    "application_email",
+    "application_phone",
+    "apply_url",
+    "recruiter_name",
+    "recruiter_email",
+    "recruiter_phone",
+    "recruiter_title",
+    "responsibilities",
+    "requirements",
+    "qualifications",
+    "benefits",
+    "tech_stack",
+    "skills",
+    "language",
+    "remote_type",
 ]
 
 # Per-million-token Haiku 4.5 pricing (input/output). Used for budget tracking.
@@ -42,12 +70,37 @@ HAIKU_PRICE_OUT_PER_M = 5.0
 
 
 _lock = threading.Lock()
+# One SQLite handle per cache path, reused across calls — the previous code
+# opened and closed a connection (and re-ran CREATE TABLE) on every page.
+_CONNECTIONS: dict[str, sqlite3.Connection] = {}
+# Hosts currently being learned, so concurrent workers don't buy the same map.
+_LEARNING: set = set()
+_WARNED: set = set()
+
+
+def _warn_once(key: str, message: str) -> None:
+    """Log a warning the first time only — these fire once per scraped page."""
+    with _lock:
+        if key in _WARNED:
+            return
+        _WARNED.add(key)
+    logging.warning("%s", message)
+
+
+def _shared_conn(path: str) -> sqlite3.Connection:
+    with _lock:
+        conn = _CONNECTIONS.get(path)
+        if conn is None:
+            conn = _connect(path)
+            _CONNECTIONS[path] = conn
+        return conn
 
 
 def _connect(path: str) -> sqlite3.Connection:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     conn = sqlite3.connect(path, check_same_thread=False)
-    conn.execute("""
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS selectors (
             host TEXT PRIMARY KEY,
             field_map_json TEXT NOT NULL,
@@ -55,8 +108,10 @@ def _connect(path: str) -> sqlite3.Connection:
             updated_at TEXT NOT NULL,
             hit_count INTEGER DEFAULT 0
         )
-    """)
-    conn.execute("""
+    """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS budget (
             month TEXT PRIMARY KEY,
             cost_usd REAL NOT NULL DEFAULT 0,
@@ -64,12 +119,13 @@ def _connect(path: str) -> sqlite3.Connection:
             tokens_out INTEGER NOT NULL DEFAULT 0,
             calls INTEGER NOT NULL DEFAULT 0
         )
-    """)
+    """
+    )
     conn.commit()
     return conn
 
 
-def _load_map(conn: sqlite3.Connection, host: str) -> Optional[Dict[str, str]]:
+def _load_map(conn: sqlite3.Connection, host: str) -> dict[str, str] | None:
     cur = conn.execute("SELECT field_map_json FROM selectors WHERE host = ?", (host,))
     row = cur.fetchone()
     if not row:
@@ -80,31 +136,34 @@ def _load_map(conn: sqlite3.Connection, host: str) -> Optional[Dict[str, str]]:
         return None
 
 
-def _save_map(conn: sqlite3.Connection, host: str, fmap: Dict[str, str]) -> None:
-    now = dt.datetime.utcnow().isoformat()
-    conn.execute("""
+def _save_map(conn: sqlite3.Connection, host: str, fmap: dict[str, str]) -> None:
+    now = _utc_now().isoformat()
+    conn.execute(
+        """
         INSERT INTO selectors (host, field_map_json, created_at, updated_at, hit_count)
         VALUES (?, ?, ?, ?, 1)
         ON CONFLICT(host) DO UPDATE SET
             field_map_json = excluded.field_map_json,
             updated_at = excluded.updated_at,
             hit_count = selectors.hit_count + 1
-    """, (host, json.dumps(fmap), now, now))
+    """,
+        (host, json.dumps(fmap), now, now),
+    )
     conn.commit()
 
 
 def _current_month_cost(conn: sqlite3.Connection) -> float:
-    month = dt.datetime.utcnow().strftime("%Y-%m")
+    month = _utc_now().strftime("%Y-%m")
     cur = conn.execute("SELECT cost_usd FROM budget WHERE month = ?", (month,))
     row = cur.fetchone()
     return row[0] if row else 0.0
 
 
 def _record_usage(conn: sqlite3.Connection, tokens_in: int, tokens_out: int) -> None:
-    month = dt.datetime.utcnow().strftime("%Y-%m")
-    cost = (tokens_in / 1_000_000) * HAIKU_PRICE_IN_PER_M + \
-           (tokens_out / 1_000_000) * HAIKU_PRICE_OUT_PER_M
-    conn.execute("""
+    month = _utc_now().strftime("%Y-%m")
+    cost = (tokens_in / 1_000_000) * HAIKU_PRICE_IN_PER_M + (tokens_out / 1_000_000) * HAIKU_PRICE_OUT_PER_M
+    conn.execute(
+        """
         INSERT INTO budget (month, cost_usd, tokens_in, tokens_out, calls)
         VALUES (?, ?, ?, ?, 1)
         ON CONFLICT(month) DO UPDATE SET
@@ -112,7 +171,9 @@ def _record_usage(conn: sqlite3.Connection, tokens_in: int, tokens_out: int) -> 
             tokens_in = budget.tokens_in + excluded.tokens_in,
             tokens_out = budget.tokens_out + excluded.tokens_out,
             calls = budget.calls + 1
-    """, (month, cost, tokens_in, tokens_out))
+    """,
+        (month, cost, tokens_in, tokens_out),
+    )
     conn.commit()
 
 
@@ -152,12 +213,12 @@ HTML:
 Output JSON only:"""
 
 
-def _call_anthropic(api_key: str, model: str, prompt: str) -> Tuple[str, int, int]:
-    """Call Anthropic API. Returns (text, tokens_in, tokens_out)."""
+def _call_anthropic(api_key: str, model: str, prompt: str) -> tuple[str, int, int]:
+    """Call the Anthropic API. Returns (text, tokens_in, tokens_out)."""
     try:
         from anthropic import Anthropic
-    except ImportError:
-        raise RuntimeError("LLM fallback requires `pip install anthropic`")
+    except ImportError as exc:
+        raise RuntimeError("LLM fallback requires `pip install anthropic`") from exc
 
     client = Anthropic(api_key=api_key)
     resp = client.messages.create(
@@ -165,11 +226,13 @@ def _call_anthropic(api_key: str, model: str, prompt: str) -> Tuple[str, int, in
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}],
     )
-    text = resp.content[0].text if resp.content else ""
-    return text, resp.usage.input_tokens, resp.usage.output_tokens
+    # Content blocks can include non-text types (thinking, tool_use); take text only.
+    text = "".join(getattr(block, "text", "") for block in (resp.content or []))
+    usage = getattr(resp, "usage", None)
+    return text, getattr(usage, "input_tokens", 0) or 0, getattr(usage, "output_tokens", 0) or 0
 
 
-def _apply_map(html: str, fmap: Dict[str, str], j: JobListing) -> int:
+def _apply_map(html: str, fmap: dict[str, str], j: JobListing) -> int:
     """Apply selector map to HTML. Fill missing fields on `j`. Returns # filled."""
     soup = BeautifulSoup(html, "lxml")
     filled = 0
@@ -191,8 +254,14 @@ def _apply_map(html: str, fmap: Dict[str, str], j: JobListing) -> int:
             try:
                 el = soup.select_one(sel)
                 if el:
-                    if field in ("responsibilities", "requirements", "qualifications",
-                                 "benefits", "tech_stack", "skills"):
+                    if field in (
+                        "responsibilities",
+                        "requirements",
+                        "qualifications",
+                        "benefits",
+                        "tech_stack",
+                        "skills",
+                    ):
                         items = [li.get_text(" ", strip=True) for li in el.find_all(["li", "p"])]
                         items = [i for i in items if i and len(i) > 2]
                         value = "; ".join(items) if items else el.get_text(" ", strip=True)
@@ -231,55 +300,86 @@ def llm_enrich(
 
     api_key = api_key or os.environ.get("ANTHROPIC_API_KEY", "")
     if not api_key:
-        logging.warning("llm_adapter: no API key, skipping LLM fallback for %s", host)
+        _warn_once("no-api-key", "llm_adapter: no API key — LLM fallback disabled for this run")
         return 0
 
+    conn = _shared_conn(cache_path)
+
+    # Cached selectors: cheap, no network. Replay them first.
     with _lock:
-        conn = _connect(cache_path)
+        cached = _load_map(conn, host)
+    if cached:
+        added = _apply_map(html, cached, j)
+        if _count_filled(j) >= min_fields:
+            logging.debug("llm_adapter: cache hit for %s, +%d fields", host, added)
+            return added
+
+    with _lock:
+        spent = _current_month_cost(conn)
+        if spent >= monthly_budget_usd:
+            _warn_once(
+                "budget",
+                f"llm_adapter: monthly budget exhausted (${spent:.2f} >= "
+                f"${monthly_budget_usd:.2f}) — no further LLM calls this month",
+            )
+            return 0
+        # Only one worker may learn a given host. Without this, N deep-scrape
+        # threads hitting the same unknown host all pay for the same lesson.
+        if host in _LEARNING:
+            return 0
+        _LEARNING.add(host)
+
+    try:
+        condensed = _condense_html(html, max_html_chars)
+        prompt = _build_prompt(condensed)
         try:
-            # Try cached map first
-            cached = _load_map(conn, host)
-            if cached:
-                added = _apply_map(html, cached, j)
-                if _count_filled(j) >= min_fields:
-                    logging.info("llm_adapter: cache hit for %s, +%d fields", host, added)
-                    return added
+            resp_text, tok_in, tok_out = _call_anthropic(api_key, model, prompt)
+        except Exception as exc:
+            logging.error("llm_adapter: API call failed for %s: %s", host, exc)
+            return 0
 
-            # Budget check
-            spent = _current_month_cost(conn)
-            if spent >= monthly_budget_usd:
-                logging.warning("llm_adapter: budget exceeded ($%.2f >= $%.2f), skipping", spent, monthly_budget_usd)
-                return 0
-
-            # Call LLM
-            condensed = _condense_html(html, max_html_chars)
-            prompt = _build_prompt(condensed)
-            try:
-                resp_text, tok_in, tok_out = _call_anthropic(api_key, model, prompt)
-            except Exception as exc:
-                logging.error("llm_adapter: API call failed for %s: %s", host, exc)
-                return 0
-
+        with _lock:
             _record_usage(conn, tok_in, tok_out)
 
-            # Parse JSON
-            try:
-                m = re.search(r"\{.*\}", resp_text, re.S)
-                fmap = json.loads(m.group(0)) if m else {}
-            except Exception:
-                logging.error("llm_adapter: bad JSON response from LLM for %s", host)
-                return 0
+        fmap = _parse_selector_map(resp_text)
+        if not fmap:
+            logging.error("llm_adapter: unusable selector map from LLM for %s", host)
+            return 0
 
-            if not isinstance(fmap, dict) or not fmap:
-                return 0
-
-            # Apply + cache
-            added = _apply_map(html, fmap, j)
-            if added > 0:
+        added = _apply_map(html, fmap, j)
+        if added > 0:
+            with _lock:
                 _save_map(conn, host, fmap)
-                logging.info("llm_adapter: learned selectors for %s, +%d fields (cost $%.4f)",
-                             host, added, (tok_in / 1_000_000) * HAIKU_PRICE_IN_PER_M +
-                             (tok_out / 1_000_000) * HAIKU_PRICE_OUT_PER_M)
-            return added
-        finally:
-            conn.close()
+            cost = (tok_in / 1_000_000) * HAIKU_PRICE_IN_PER_M + (tok_out / 1_000_000) * HAIKU_PRICE_OUT_PER_M
+            logging.info("llm_adapter: learned selectors for %s, +%d fields (cost $%.4f)", host, added, cost)
+        return added
+    finally:
+        with _lock:
+            _LEARNING.discard(host)
+
+
+def _parse_selector_map(resp_text: str) -> dict[str, str]:
+    """Extract and sanity-check the model's JSON selector map.
+
+    Rejects non-string values and unknown field names outright — a malformed map
+    would otherwise be cached and replayed for every later page on that host.
+    """
+    match = re.search(r"\{.*\}", resp_text or "", re.S)
+    if not match:
+        return {}
+    try:
+        raw = json.loads(match.group(0))
+    except ValueError:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): v.strip() for k, v in raw.items() if k in FIELDS and isinstance(v, str) and v.strip()}
+
+
+def close_caches() -> None:
+    """Close pooled SQLite handles. Call at process shutdown; tests use it too."""
+    with _lock:
+        for conn in _CONNECTIONS.values():
+            with suppress(sqlite3.Error):
+                conn.close()
+        _CONNECTIONS.clear()

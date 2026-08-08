@@ -11,15 +11,17 @@ pages, etc.). It:
 
 Fall back to plain HttpClient when Playwright isn't installed.
 """
+
+import logging
 from collections import deque
+from collections.abc import Iterable, Iterator
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Set, Tuple
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
 from .http import HttpClient
-
 
 COOKIE_BUTTON_SELECTORS = [
     "#onetrust-accept-btn-handler",
@@ -41,8 +43,56 @@ COOKIE_BUTTON_SELECTORS = [
 ]
 
 EXPAND_SELECTORS_TEXT = [
-    "Show more", "Read more", "See more", "View full", "Mehr anzeigen", "Mehr lesen", "Voir plus", "Vis mer",
+    "Show more",
+    "Read more",
+    "See more",
+    "View full",
+    "Mehr anzeigen",
+    "Mehr lesen",
+    "Voir plus",
+    "Vis mer",
 ]
+
+# Binary/asset URLs that are never job pages. Followed blindly, a crawl burns its
+# whole page budget downloading PDFs and images.
+SKIP_EXTENSIONS = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".svg",
+    ".ico",
+    ".bmp",
+    ".avif",
+    ".pdf",
+    ".zip",
+    ".gz",
+    ".tar",
+    ".rar",
+    ".7z",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".mp3",
+    ".mp4",
+    ".webm",
+    ".avi",
+    ".mov",
+    ".css",
+    ".js",
+    ".json",
+    ".xml",
+    ".rss",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".otf",
+    ".eot",
+)
 
 
 @dataclass
@@ -84,53 +134,45 @@ class PlaywrightFetcher:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        try:
+        with suppress(Exception):
             if self._context is not None:
                 self._context.close()
             if self._browser is not None:
                 self._browser.close()
             if self._playwright is not None:
                 self._playwright.stop()
-        except Exception:
-            pass
 
-    def get(self, url: str) -> Optional[Tuple[str, str]]:
+    def get(self, url: str) -> tuple[str, str] | None:
         if self._context is None:
             return None
         page = self._context.new_page()
         try:
-            try:
-                page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
-            except Exception:
+            with suppress(Exception):
                 # 'networkidle' is brittle on SPAs; domcontentloaded + manual wait is safer.
-                pass
+                page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
             self._dismiss_overlays(page)
             self._wait_for_job_content(page)
             self._expand_content(page)
-            html = page.content()
-            return page.url, html
-        except Exception:
+            return page.url, page.content()
+        except Exception as exc:
+            logging.debug("playwright fetch failed for %s: %s", url, exc)
             return None
         finally:
-            try:
+            with suppress(Exception):
                 page.close()
-            except Exception:
-                pass
 
     def _dismiss_overlays(self, page) -> None:
         for sel in COOKIE_BUTTON_SELECTORS:
-            try:
+            with suppress(Exception):
                 btn = page.query_selector(sel)
                 if btn:
                     btn.click(timeout=1500)
                     page.wait_for_timeout(200)
                     break
-            except Exception:
-                continue
 
     def _wait_for_job_content(self, page) -> None:
         # Race: JSON-LD JobPosting → microdata → known card selectors → 6s timeout.
-        try:
+        with suppress(Exception):
             page.wait_for_function(
                 """
                 () => {
@@ -149,16 +191,12 @@ class PlaywrightFetcher:
                 """,
                 timeout=6000,
             )
-        except Exception:
-            pass
 
     def _expand_content(self, page) -> None:
         for label in EXPAND_SELECTORS_TEXT:
-            try:
+            with suppress(Exception):
                 page.get_by_role("button", name=label).click(timeout=800)
                 page.wait_for_timeout(150)
-            except Exception:
-                pass
 
 
 class Crawler:
@@ -176,8 +214,9 @@ class Crawler:
         self.allow_domains = {self._normalize_domain(d) for d in allow_domains if d}
         self.use_playwright = use_playwright
 
-    def crawl(self, start_url: str) -> Iterable[Page]:
-        visited: Set[str] = set()
+    def crawl(self, start_url: str) -> Iterator[Page]:
+        visited: set[str] = set()
+        queued: set[str] = {start_url}
         queue = deque([(start_url, 0)])
         pages = 0
 
@@ -186,7 +225,8 @@ class Crawler:
             try:
                 fetcher = PlaywrightFetcher()
                 fetcher.__enter__()
-            except Exception:
+            except Exception as exc:
+                logging.warning("Playwright unavailable (%s) — crawling over plain HTTP", exc)
                 fetcher = None
 
         try:
@@ -200,26 +240,43 @@ class Crawler:
                 if result is None:
                     continue
                 final_url, html = result
+                # A redirect can land several queue entries on the same page.
+                if final_url != url:
+                    if final_url in visited:
+                        continue
+                    visited.add(final_url)
                 pages += 1
                 yield Page(final_url, html)
 
+                if depth >= self.max_depth:
+                    continue
                 for link in self._extract_links(final_url, html):
-                    if link not in visited:
-                        queue.append((link, depth + 1))
+                    # Track membership separately: `link not in visited` let the
+                    # same URL be appended once per referring page, so a site
+                    # with a global nav queued thousands of duplicates.
+                    if link in visited or link in queued:
+                        continue
+                    queued.add(link)
+                    queue.append((link, depth + 1))
         finally:
             if fetcher is not None:
-                fetcher.__exit__(None, None, None)
+                with suppress(Exception):
+                    fetcher.__exit__(None, None, None)
 
-    def _extract_links(self, base_url: str, html: str) -> List[str]:
+    def _extract_links(self, base_url: str, html: str) -> list[str]:
         soup = BeautifulSoup(html, "lxml")
         seen = set()
-        links: List[str] = []
+        links: list[str] = []
         for tag in soup.find_all("a", href=True):
-            href = tag.get("href", "").strip()
-            if not href:
+            href = tag.get("href", "")
+            href = (href if isinstance(href, str) else " ".join(href)).strip()
+            if not href or href.startswith(("javascript:", "mailto:", "tel:", "#", "data:")):
                 continue
-            absolute = urljoin(base_url, href)
-            parsed = urlparse(absolute)
+            try:
+                absolute = urljoin(base_url, href)
+                parsed = urlparse(absolute)
+            except ValueError:
+                continue
             absolute = parsed._replace(fragment="").geturl()
             if not self._is_allowed_url(absolute):
                 continue
@@ -230,10 +287,13 @@ class Crawler:
         return links
 
     def _is_allowed_url(self, url: str) -> bool:
-        parsed = urlparse(url)
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            return False
         if parsed.scheme not in {"http", "https"}:
             return False
-        if any(parsed.path.lower().endswith(ext) for ext in [".png", ".jpg", ".pdf", ".zip", ".svg"]):
+        if parsed.path.lower().endswith(SKIP_EXTENSIONS):
             return False
         if not self.allow_domains:
             return True
