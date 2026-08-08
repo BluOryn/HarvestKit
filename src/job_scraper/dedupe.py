@@ -1,12 +1,12 @@
-from typing import Iterable, List, Set
+from collections.abc import Iterable
 
 from .models import JobListing
 from .normalize import job_fingerprint
 
 
-def dedupe_jobs(jobs: Iterable[JobListing]) -> List[JobListing]:
-    seen: Set[str] = set()
-    unique: List[JobListing] = []
+def dedupe_jobs(jobs: Iterable[JobListing]) -> list[JobListing]:
+    seen: set[str] = set()
+    unique: list[JobListing] = []
     for job in jobs:
         key = job_fingerprint(job)
         if key in seen:

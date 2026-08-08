@@ -1,21 +1,18 @@
-import hashlib
 import re
-from typing import Iterable, List
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from collections.abc import Iterable
 
-from .models import JobListing
+from .models import TRACKING_PARAMS, JobListing, canonicalize_url
 
-TRACKING_PARAMS = {
-    "utm_source",
-    "utm_medium",
-    "utm_campaign",
-    "utm_term",
-    "utm_content",
-    "gclid",
-    "fbclid",
-    "mc_cid",
-    "mc_eid",
-}
+__all__ = [
+    "TRACKING_PARAMS",
+    "canonicalize_url",
+    "job_fingerprint",
+    "location_blob",
+    "match_keywords",
+    "match_location",
+    "normalize_text",
+    "text_blob",
+]
 
 
 def normalize_text(text: str) -> str:
@@ -25,43 +22,40 @@ def normalize_text(text: str) -> str:
     return text.strip()
 
 
-def canonicalize_url(url: str) -> str:
-    if not url:
-        return ""
-    parsed = urlparse(url)
-    query = [
-        (k, v)
-        for k, v in parse_qsl(parsed.query, keep_blank_values=True)
-        if k.lower() not in TRACKING_PARAMS
-    ]
-    normalized = parsed._replace(fragment="", query=urlencode(query, doseq=True))
-    return urlunparse(normalized).rstrip("/")
-
-
 def job_fingerprint(job: JobListing) -> str:
-    key_parts = [
-        canonicalize_url(job.apply_url) or canonicalize_url(job.job_url),
-        normalize_text(job.title),
-        normalize_text(job.company),
-        normalize_text(job.location),
-    ]
-    raw = "|".join(key_parts)
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+    """Dedupe key for a listing.
+
+    Delegates to `JobListing.fingerprint()` so the key used to drop duplicates is
+    the same string that lands in the CSV `id` column. Two implementations here
+    previously disagreed (one canonicalised the URL, the other didn't), which let
+    the same posting dedupe under one id and export under another.
+    """
+    return job.fingerprint()
 
 
 def text_blob(job: JobListing) -> str:
+    """Haystack for keyword filtering.
+
+    Includes tech_stack/skills because that is what the shipped configs document
+    ("filter on the merged title+description+tech_stack") — without them a
+    `python`/`kubernetes` include list silently dropped postings whose stack was
+    only detectable from the parsed tech list.
+    """
     return " ".join(
         [
             job.title or "",
             job.company or "",
             job.location or "",
+            job.department or "",
             job.description or "",
+            job.tech_stack or "",
+            job.skills or "",
         ]
     ).lower()
 
 
-def match_keywords(job: JobListing, keywords: Iterable[str]) -> List[str]:
-    matches: List[str] = []
+def match_keywords(job: JobListing, keywords: Iterable[str]) -> list[str]:
+    matches: list[str] = []
     if not keywords:
         return matches
     blob = text_blob(job)
@@ -80,25 +74,39 @@ def match_keywords(job: JobListing, keywords: Iterable[str]) -> List[str]:
 
 
 def location_blob(job: JobListing) -> str:
-    return " ".join([job.location or "", job.remote or "", job.title or ""]).lower()
+    return " ".join(
+        [job.location or "", job.city or "", job.region or "", job.country or "", job.title or ""]
+    ).lower()
 
 
-def match_location(job: JobListing, includes: Iterable[str], excludes: Iterable[str], allow_remote: bool) -> bool:
-    """Return True if job location passes filter.
+def match_location(
+    job: JobListing, includes: Iterable[str], excludes: Iterable[str], allow_remote: bool
+) -> bool:
+    """Return True if a job passes the location filter.
 
-    - includes: any keyword (city/country/code) must appear in location/title.
-    - excludes: any match in EXCLUDES → reject (unless overridden by include match).
-    - allow_remote: remote jobs pass if remote field set.
+    - includes: at least one keyword (city/region/country/code) must appear in the
+      location fields or the title.
+    - excludes: a match rejects the job unless an include also matched.
+    - allow_remote: a job flagged remote passes the include check even when its
+      physical location says nothing about the requested city.
+
+    The remote escape hatch previously tested `not blob.strip()` while `blob`
+    itself contained `job.remote` — so the condition could never be true and the
+    `allow_remote` flag did nothing. It now keys off `remote_type` alone.
     """
     inc = [k.strip().lower() for k in includes if k and k.strip()]
     exc = [k.strip().lower() for k in excludes if k and k.strip()]
     blob = location_blob(job)
-    if allow_remote and (job.remote or "").lower() == "remote" and not blob.strip():
-        return True
-    inc_hit = any(re.search(rf"\b{re.escape(k)}\b", blob) for k in inc) if inc else True
-    exc_hit = any(re.search(rf"\b{re.escape(k)}\b", blob) for k in exc) if exc else False
+    is_remote = "remote" in (job.remote_type or "").lower()
+
+    inc_hit = any(re.search(rf"\b{re.escape(k)}\b", blob) for k in inc)
+    if allow_remote and is_remote:
+        inc_hit = True
+    exc_hit = any(re.search(rf"\b{re.escape(k)}\b", blob) for k in exc)
+
     if inc and not inc_hit:
         return False
-    if exc_hit and not inc_hit:
-        return False
-    return True
+    # An exclude rejects, unless an explicitly configured include also matched.
+    # `inc_hit` used to default to True when no includes were set, which made
+    # `locations.exclude` a no-op for every config that only listed excludes.
+    return not (exc_hit and not (inc and inc_hit))
