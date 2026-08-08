@@ -44,12 +44,19 @@ def fromstring(text: str, *, source: str = "") -> ET.Element | None:
     if _defused_fromstring is not None:
         try:
             return _defused_fromstring(text)
-        except Exception as exc:
+        except ET.ParseError as exc:
             logging.debug("xml: parse failed for %s: %s", source or "?", exc)
+            return None
+        except Exception as exc:
+            # defusedxml raises its own DefusedXmlException subclasses when it
+            # blocks a bomb. That is an attack signal, not a malformed feed.
+            logging.warning("xml: refusing unsafe document from %s: %s", source or "?", exc)
             return None
 
     # No defusedxml — reject entity/DTD declarations rather than expand them.
-    if _DOCTYPE_RX.search(text[:8192]):
+    # Scan the whole document, not just the head: the XML prolog may hold
+    # arbitrarily long comments, so a bomb can be pushed past any fixed window.
+    if _DOCTYPE_RX.search(text):
         logging.warning(
             "xml: refusing document with a DOCTYPE/ENTITY declaration from %s "
             "(install defusedxml to parse these safely)",
