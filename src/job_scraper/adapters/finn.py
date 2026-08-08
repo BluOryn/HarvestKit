@@ -13,21 +13,18 @@ This adapter:
   3. main.py's deep_scrape pass visits each detail page and merges JSON-LD +
      section parser + HR miner output.
 """
+
 from __future__ import annotations
 
 import logging
 import re
-from typing import List, Set
-from urllib.parse import urlencode, urljoin, urlparse, parse_qs
-
-from bs4 import BeautifulSoup
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from ..config import RunConfig, TargetConfig
 from ..http import HttpClient
 from ..models import JobListing
 from ..normalize import canonicalize_url
 from .base import BaseAdapter
-
 
 SEARCH_BASE = "https://www.finn.no/job/fulltime/search.html"
 AD_PATH_RX = re.compile(r"/job/ad/(\d+)")
@@ -41,19 +38,19 @@ class FinnNoAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         # Pull every query parameter from the user-supplied URL (q, published,
         # location, industry, etc.) — pass them through to the SSR search.
         parsed = urlparse(target.url)
         base_params = parse_qs(parsed.query, keep_blank_values=True)
         # Flatten parse_qs's {k: [v1, v2]} into a list of tuples to preserve repeats
-        flat_params: List[tuple] = []
+        flat_params: list[tuple] = []
         for k, vs in base_params.items():
             for v in vs:
                 flat_params.append((k, v))
 
-        listings: List[JobListing] = []
-        seen_ids: Set[str] = set()
+        listings: list[JobListing] = []
+        seen_ids: set[str] = set()
         max_pages = max(1, run_config.max_pages or 50)
         for page in range(1, max_pages + 1):
             page_params = list(flat_params)
@@ -87,11 +84,11 @@ class FinnNoAdapter(BaseAdapter):
         return listings
 
     @staticmethod
-    def _extract_ad_ids(html: str) -> List[str]:
+    def _extract_ad_ids(html: str) -> list[str]:
         # Match every /job/ad/<digits> regardless of absolute vs relative URL.
         ids = AD_PATH_RX.findall(html)
         seen = set()
-        out: List[str] = []
+        out: list[str] = []
         for i in ids:
             if i in seen:
                 continue

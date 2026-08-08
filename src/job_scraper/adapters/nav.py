@@ -9,19 +9,18 @@ Detail:  https://arbeidsplassen.nav.no/stillinger/stilling/{uuid}
 Listing page hands out 25 detail UUIDs each; deep_scrape visits each and the
 universal smart-DOM extractor (no JSON-LD needed) pulls the rest.
 """
+
 from __future__ import annotations
 
 import logging
 import re
-from typing import List, Set
-from urllib.parse import urlencode, urlparse, parse_qs
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from ..config import RunConfig, TargetConfig
 from ..http import HttpClient
 from ..models import JobListing
 from ..normalize import canonicalize_url
 from .base import BaseAdapter
-
 
 SEARCH_BASE = "https://arbeidsplassen.nav.no/stillinger"
 DETAIL_URL_RX = re.compile(r"/stillinger/stilling/([a-f0-9\-]{20,})", re.I)
@@ -33,16 +32,16 @@ class NavNoAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         parsed = urlparse(target.url)
         base_params = parse_qs(parsed.query, keep_blank_values=True)
-        flat: List[tuple] = []
+        flat: list[tuple] = []
         for k, vs in base_params.items():
             for v in vs:
                 flat.append((k, v))
 
-        listings: List[JobListing] = []
-        seen: Set[str] = set()
+        listings: list[JobListing] = []
+        seen: set[str] = set()
         max_pages = max(1, run_config.max_pages or 50)
         for page in range(1, max_pages + 1):
             page_params = list(flat)
@@ -77,9 +76,9 @@ class NavNoAdapter(BaseAdapter):
         return listings
 
     @staticmethod
-    def _extract_uuids(html: str) -> List[str]:
+    def _extract_uuids(html: str) -> list[str]:
         seen = set()
-        out: List[str] = []
+        out: list[str] = []
         for u in DETAIL_URL_RX.findall(html):
             if u in seen:
                 continue

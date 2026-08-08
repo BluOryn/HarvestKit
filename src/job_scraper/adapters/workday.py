@@ -1,7 +1,5 @@
-import json
 import logging
 import re
-from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -26,15 +24,15 @@ class WorkdayAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         parts = self._extract_parts(target.url)
         if not parts:
             return []
         tenant, host, site, lang = parts
         cxs_base = f"https://{tenant}.{host}.com/wday/cxs/{tenant}/{site}/jobs"
-        listings: List[JobListing] = []
+        listings: list[JobListing] = []
         offset = 0
-        seen_total: Optional[int] = None
+        seen_total: int | None = None
         while True:
             body = {"limit": self.PAGE_SIZE, "offset": offset, "searchText": "", "appliedFacets": {}}
             data = self._post_json(http, cxs_base, body)
@@ -46,11 +44,15 @@ class WorkdayAdapter(BaseAdapter):
             for item in postings:
                 external_path = item.get("externalPath") or ""
                 full_path = f"https://{tenant}.{host}.com{external_path}" if external_path else ""
-                detail_api = f"https://{tenant}.{host}.com/wday/cxs/{tenant}/{site}{external_path}" if external_path else ""
+                detail_api = (
+                    f"https://{tenant}.{host}.com/wday/cxs/{tenant}/{site}{external_path}"
+                    if external_path
+                    else ""
+                )
                 description = ""
                 detail = http.get_json(detail_api) if detail_api else None
                 if detail:
-                    posting = (detail.get("jobPostingInfo") or {})
+                    posting = detail.get("jobPostingInfo") or {}
                     description_html = posting.get("jobDescription") or ""
                     if description_html:
                         description = BeautifulSoup(description_html, "lxml").get_text(" ", strip=True)
@@ -75,10 +77,10 @@ class WorkdayAdapter(BaseAdapter):
         logging.info("workday %s/%s: %d jobs", tenant, site, len(listings))
         return listings
 
-    def _post_json(self, http: HttpClient, url: str, body: dict) -> Optional[dict]:
+    def _post_json(self, http: HttpClient, url: str, body: dict) -> dict | None:
         return http.post_json(url, body)
 
-    def _extract_parts(self, url: str) -> Optional[Tuple[str, str, str, str]]:
+    def _extract_parts(self, url: str) -> tuple[str, str, str, str] | None:
         parsed = urlparse(url)
         host = parsed.netloc.lower()
         m = re.match(r"^([a-z0-9-]+)\.(wd\d+)\.myworkdayjobs\.com$", host)

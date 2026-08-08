@@ -1,5 +1,4 @@
 import logging
-from typing import List
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -21,7 +20,7 @@ class AshbyAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         slug = self._extract_slug(target.url)
         if not slug:
             return []
@@ -31,7 +30,7 @@ class AshbyAdapter(BaseAdapter):
             logging.info("ashby: no payload for %s", slug)
             return []
         jobs = payload.get("jobs", []) or []
-        listings: List[JobListing] = []
+        listings: list[JobListing] = []
         for item in jobs:
             description = ""
             html = item.get("descriptionHtml") or ""
@@ -52,7 +51,7 @@ class AshbyAdapter(BaseAdapter):
                     title=item.get("title") or "",
                     company=slug,
                     location=location,
-                    remote="remote" if workplace.lower() == "remote" else "",
+                    remote_type="remote" if workplace.lower() == "remote" else "",
                     employment_type=item.get("employmentType") or "",
                     posted_date=item.get("publishedAt") or item.get("updatedAt") or "",
                     description=description,

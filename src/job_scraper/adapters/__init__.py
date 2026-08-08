@@ -1,16 +1,16 @@
 import re
-from typing import Dict
 from urllib.parse import urlparse
 
+from ..config import TargetConfig
 from .arbeitsagentur import ArbeitsagenturAdapter
 from .ashby import AshbyAdapter
 from .base import BaseAdapter
 from .finn import FinnNoAdapter
 from .generic import GenericAdapter
-from .karrierestart import KarrierestartAdapter
 from .greenhouse import GreenhouseAdapter
 from .jobbsafari import JobbsafariAdapter
 from .jobsch import JobsChAdapter
+from .karrierestart import KarrierestartAdapter
 from .lever import LeverAdapter
 from .nav import NavNoAdapter
 from .personio import PersonioAdapter
@@ -18,10 +18,8 @@ from .recruitee import RecruiteeAdapter
 from .smartrecruiters import SmartRecruitersAdapter
 from .workable import WorkableAdapter
 from .workday import WorkdayAdapter
-from ..config import TargetConfig
 
-
-ADAPTERS: Dict[str, BaseAdapter] = {
+ADAPTERS: dict[str, BaseAdapter] = {
     "greenhouse": GreenhouseAdapter(),
     "lever": LeverAdapter(),
     "smartrecruiters": SmartRecruitersAdapter(),
@@ -41,15 +39,20 @@ ADAPTERS: Dict[str, BaseAdapter] = {
 
 
 def get_adapter(target: TargetConfig) -> BaseAdapter:
+    """Resolve a target to its adapter singleton.
+
+    Always returns an instance from ADAPTERS — never a fresh GenericAdapter().
+    GenericAdapter guards against delegating to itself with `adapter is self`,
+    which only holds if both sides are the same registry object.
+    """
     adapter_name = (target.adapter or "auto").lower()
     if adapter_name == "auto":
         adapter_name = _detect_adapter(target.url)
-    return ADAPTERS.get(adapter_name, GenericAdapter())
+    return ADAPTERS.get(adapter_name) or ADAPTERS["generic"]
 
 
 def _detect_adapter(url: str) -> str:
     host = urlparse(url).netloc.lower()
-    lower = url.lower()
     if "boards.greenhouse.io" in host or "boards-api.greenhouse.io" in host:
         return "greenhouse"
     if host == "jobs.lever.co" or host.endswith(".lever.co"):

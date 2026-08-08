@@ -1,5 +1,4 @@
 import logging
-from typing import List, Set
 from urllib.parse import urlparse
 
 from ..config import RunConfig, TargetConfig
@@ -18,13 +17,14 @@ class GenericAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
-        listings: List[JobListing] = []
-        seen_urls: Set[str] = set()
+    ) -> list[JobListing]:
+        listings: list[JobListing] = []
+        seen_urls: set[str] = set()
 
         # Step 1: try ATS auto-discovery from homepage
         for adapter_name, ats_url in auto_discover(target.url, http):
             from . import ADAPTERS  # local import to avoid circular
+
             adapter = ADAPTERS.get(adapter_name)
             if adapter is None or adapter is self:
                 continue
@@ -49,7 +49,6 @@ class GenericAdapter(BaseAdapter):
         job_urls = filter_job_urls(sitemap_urls)
         if job_urls:
             logging.info("generic %s: sitemap → %d job URLs", target.name, len(job_urls))
-            host = urlparse(target.url).netloc
             for url in job_urls[: run_config.max_pages]:
                 page_result = http.get(url, allow_404=True)
                 if page_result is None:

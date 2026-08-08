@@ -1,6 +1,5 @@
 import logging
 from datetime import datetime, timezone
-from typing import List
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -18,7 +17,7 @@ class LeverAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         slug = self._extract_slug(target.url)
         if not slug:
             return []
@@ -27,7 +26,7 @@ class LeverAdapter(BaseAdapter):
         if payload is None or not isinstance(payload, list):
             logging.info("lever: no payload for %s", slug)
             return []
-        listings: List[JobListing] = []
+        listings: list[JobListing] = []
         for item in payload:
             description_html = item.get("description", "") or ""
             lists_html = ""
@@ -54,7 +53,7 @@ class LeverAdapter(BaseAdapter):
                     title=item.get("text") or "",
                     company=slug,
                     location=location,
-                    remote="remote" if workplace.lower() == "remote" else "",
+                    remote_type="remote" if workplace.lower() == "remote" else "",
                     employment_type=categories.get("commitment") or "",
                     posted_date=posted_date,
                     description=description,

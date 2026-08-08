@@ -1,5 +1,4 @@
 import logging
-from typing import List
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -17,7 +16,7 @@ class GreenhouseAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         slug = self._extract_slug(target.url)
         if not slug:
             return []
@@ -28,10 +27,12 @@ class GreenhouseAdapter(BaseAdapter):
             logging.info("greenhouse: no payload for %s", slug)
             return []
         items = payload.get("jobs", []) or []
-        listings: List[JobListing] = []
+        listings: list[JobListing] = []
         for item in items:
             description_html = item.get("content") or ""
-            description = BeautifulSoup(description_html, "lxml").get_text(" ", strip=True) if description_html else ""
+            description = (
+                BeautifulSoup(description_html, "lxml").get_text(" ", strip=True) if description_html else ""
+            )
             location = (item.get("location") or {}).get("name", "")
             offices = item.get("offices") or []
             office_names = ", ".join(o.get("name", "") for o in offices if o.get("name"))

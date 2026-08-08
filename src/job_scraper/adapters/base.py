@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import List
 
 from ..config import RunConfig, TargetConfig
 from ..http import HttpClient
@@ -13,5 +12,5 @@ class BaseAdapter(ABC):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         raise NotImplementedError

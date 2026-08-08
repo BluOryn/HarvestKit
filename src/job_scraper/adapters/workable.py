@@ -1,5 +1,4 @@
 import logging
-from typing import List, Optional
 from urllib.parse import urlparse
 
 from ..config import RunConfig, TargetConfig
@@ -15,7 +14,7 @@ class WorkableAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         slug = self._extract_slug(target.url)
         if not slug:
             return []
@@ -27,13 +26,13 @@ class WorkableAdapter(BaseAdapter):
         listings = self._v3(slug, http)
         return listings
 
-    def _widget(self, slug: str, http: HttpClient) -> List[JobListing]:
+    def _widget(self, slug: str, http: HttpClient) -> list[JobListing]:
         api = f"https://apply.workable.com/api/v1/widget/accounts/{slug}"
         payload = http.get_json(api)
         if not payload:
             return []
         jobs = payload.get("jobs", []) or []
-        out: List[JobListing] = []
+        out: list[JobListing] = []
         for item in jobs:
             shortcode = item.get("shortcode") or ""
             location_obj = item.get("location") or {}
@@ -46,7 +45,7 @@ class WorkableAdapter(BaseAdapter):
                     title=item.get("title") or "",
                     company=slug,
                     location=location,
-                    remote=remote,
+                    remote_type=remote,
                     employment_type=item.get("type") or "",
                     posted_date=item.get("published") or item.get("created_at") or "",
                     description="",
@@ -58,7 +57,7 @@ class WorkableAdapter(BaseAdapter):
             logging.info("workable widget %s: %d jobs", slug, len(out))
         return out
 
-    def _v3(self, slug: str, http: HttpClient) -> List[JobListing]:
+    def _v3(self, slug: str, http: HttpClient) -> list[JobListing]:
         url = f"https://apply.workable.com/api/v3/accounts/{slug}/jobs"
         body = {"query": "", "department": [], "location": [], "workplace": [], "remote": []}
         headers = {
@@ -68,8 +67,8 @@ class WorkableAdapter(BaseAdapter):
             "Origin": "https://apply.workable.com",
             "Referer": f"https://apply.workable.com/{slug}/",
         }
-        all_results: List[dict] = []
-        token: Optional[str] = None
+        all_results: list[dict] = []
+        token: str | None = None
         for _ in range(50):
             payload = dict(body)
             if token:
@@ -82,7 +81,7 @@ class WorkableAdapter(BaseAdapter):
             token = data.get("nextPage")
             if not token or not chunk:
                 break
-        out: List[JobListing] = []
+        out: list[JobListing] = []
         for item in all_results:
             shortcode = item.get("shortcode") or ""
             loc = item.get("location") or {}
@@ -94,7 +93,7 @@ class WorkableAdapter(BaseAdapter):
                     title=item.get("title") or "",
                     company=slug,
                     location=location,
-                    remote="remote" if item.get("remote") else "",
+                    remote_type="remote" if item.get("remote") else "",
                     employment_type=item.get("employment_type") or "",
                     posted_date=item.get("published_on") or "",
                     description="",

@@ -1,5 +1,4 @@
 import logging
-from typing import List, Optional, Set
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -19,11 +18,11 @@ class SmartRecruitersAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         slug = self._resolve_slug(target.url, http)
         if not slug:
             return []
-        listings: List[JobListing] = []
+        listings: list[JobListing] = []
         offset = 0
         while True:
             api_url = (
@@ -46,7 +45,7 @@ class SmartRecruitersAdapter(BaseAdapter):
             logging.info("smartrecruiters %s: %d jobs", slug, len(listings))
         return listings
 
-    def _resolve_slug(self, url: str, http: HttpClient) -> Optional[str]:
+    def _resolve_slug(self, url: str, http: HttpClient) -> str | None:
         slug = self._extract_slug(url)
         if not slug:
             return None
@@ -55,7 +54,7 @@ class SmartRecruitersAdapter(BaseAdapter):
         # Try variants
         bases = {slug, slug.lower(), slug.upper(), slug.capitalize()}
         suffixes = ["", "Group", "SE", "AG", "GmbH", "Inc", "Holding", "International"]
-        seen: Set[str] = set()
+        seen: set[str] = set()
         for base in bases:
             for suf in suffixes:
                 cand = f"{base}{suf}"
@@ -81,7 +80,7 @@ class SmartRecruitersAdapter(BaseAdapter):
         posting_id = item.get("id")
         company_name = (item.get("company") or {}).get("name", "") or slug
         job_ad = item.get("jobAd") or {}
-        sections = (job_ad.get("sections") or {})
+        sections = job_ad.get("sections") or {}
         description = ""
         for key in ("companyDescription", "jobDescription", "qualifications", "additionalInformation"):
             block = sections.get(key) or {}

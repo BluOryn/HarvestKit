@@ -1,11 +1,10 @@
 import logging
 import re
-from typing import List, Optional
 from urllib.parse import urlparse
-from xml.etree import ElementTree as ET
 
 from bs4 import BeautifulSoup
 
+from .. import safe_xml
 from ..config import RunConfig, TargetConfig
 from ..http import HttpClient
 from ..models import JobListing
@@ -19,7 +18,7 @@ class PersonioAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         bases = self._resolve_bases(target.url, http)
         if not bases:
             return []
@@ -29,7 +28,7 @@ class PersonioAdapter(BaseAdapter):
                 return jobs
         return []
 
-    def _resolve_bases(self, url: str, http: HttpClient) -> List[str]:
+    def _resolve_bases(self, url: str, http: HttpClient) -> list[str]:
         parsed = urlparse(url)
         host = parsed.netloc.lower()
         if not host:
@@ -43,7 +42,7 @@ class PersonioAdapter(BaseAdapter):
         slug = host.split(".")[0]
         return [f"https://{slug}.jobs.personio.de", f"https://{slug}.jobs.personio.com"]
 
-    def _fetch_feed(self, base: str, http: HttpClient) -> List[JobListing]:
+    def _fetch_feed(self, base: str, http: HttpClient) -> list[JobListing]:
         feed_url = f"{base.rstrip('/')}/xml"
         result = http.get(feed_url, headers={"Accept": "application/xml,text/xml,*/*"}, allow_404=True)
         if result is None:
@@ -51,13 +50,11 @@ class PersonioAdapter(BaseAdapter):
         _, body = result
         if not body or not body.strip().startswith("<?xml"):
             return []
-        try:
-            root = ET.fromstring(body)
-        except ET.ParseError as exc:
-            logging.debug("personio xml parse fail %s: %s", feed_url, exc)
+        root = safe_xml.fromstring(body, source=feed_url)
+        if root is None:
             return []
         slug = urlparse(base).netloc.split(".")[0]
-        listings: List[JobListing] = []
+        listings: list[JobListing] = []
         for position in root.iter("position"):
             title = (position.findtext("name") or "").strip()
             office = (position.findtext("office") or "").strip()
@@ -70,7 +67,7 @@ class PersonioAdapter(BaseAdapter):
             occupation_category = (position.findtext("occupationCategory") or "").strip()
             created_at = (position.findtext("createdAt") or "").strip()
             job_descriptions_node = position.find("jobDescriptions")
-            description_parts: List[str] = []
+            description_parts: list[str] = []
             if job_descriptions_node is not None:
                 for jd in job_descriptions_node.findall("jobDescription"):
                     name = (jd.findtext("name") or "").strip()
@@ -87,14 +84,16 @@ class PersonioAdapter(BaseAdapter):
                 position_url = f"{base.rstrip('/')}/job/{job_id}"
             description = " ".join(description_parts)
             location = office
-            tags = " ".join([department, recruiting_category, occupation, occupation_category, seniority]).strip()
+            tags = " ".join(
+                [department, recruiting_category, occupation, occupation_category, seniority]
+            ).strip()
             full_desc = (description + " " + tags).strip()
             listings.append(
                 JobListing(
                     title=title,
                     company=slug,
                     location=location,
-                    remote="remote" if re.search(r"\bremote\b", schedule + " " + office, re.I) else "",
+                    remote_type="remote" if re.search(r"\bremote\b", schedule + " " + office, re.I) else "",
                     employment_type=employment_type or schedule,
                     posted_date=created_at,
                     description=full_desc,

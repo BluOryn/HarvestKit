@@ -10,12 +10,11 @@ then let deep_scrape walk each detail page.
 The universal extractor handles the detail-page parse via our new
 __NEXT_DATA__ hook in universal.py.
 """
+
 from __future__ import annotations
 
 import logging
 import re
-from typing import List, Set
-from urllib.parse import urlparse
 
 from ..config import RunConfig, TargetConfig
 from ..http import HttpClient
@@ -23,17 +22,16 @@ from ..models import JobListing
 from ..normalize import canonicalize_url
 from .base import BaseAdapter
 
-
 # Detail URL contains slug ending in a numeric id (last 6+ digits)
 JOB_PATH_RX = re.compile(r"/jobb/([\w\-]+-(\d{5,}))")
 
 
 class JobbsafariAdapter(BaseAdapter):
-    def fetch_jobs(self, target: TargetConfig, run_config: RunConfig, http: HttpClient) -> List[JobListing]:
+    def fetch_jobs(self, target: TargetConfig, run_config: RunConfig, http: HttpClient) -> list[JobListing]:
         max_pages = max(1, run_config.max_pages or 30)
         base = target.url
-        seen: Set[str] = set()
-        listings: List[JobListing] = []
+        seen: set[str] = set()
+        listings: list[JobListing] = []
 
         for page in range(1, max_pages + 1):
             sep = "&" if "?" in base else "?"

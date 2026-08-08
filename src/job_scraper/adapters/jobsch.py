@@ -12,19 +12,18 @@ Two listing paths:
 Either way, we return JobListing stubs with the canonical detail URL,
 and main.py's deep_scrape visits each detail page.
 """
+
 from __future__ import annotations
 
 import logging
 import re
-from typing import List, Tuple
-from urllib.parse import parse_qsl, urlencode, urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 from ..config import RunConfig, TargetConfig
 from ..http import HttpClient
 from ..models import JobListing
 from ..normalize import canonicalize_url
 from .base import BaseAdapter
-
 
 API_BASE = "https://www.jobs.ch/api/v1/public/search"
 PAGE_SIZE = 20  # API default
@@ -41,11 +40,15 @@ class JobsChAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         # If user passed an HTML search URL, walk it page-by-page — server honors
         # the filter querystring. Otherwise fall back to the API.
         parsed = urlparse(target.url)
-        if "/vacancies/" in parsed.path or "/stellenangebote/" in parsed.path or "/offres-emplois/" in parsed.path:
+        if (
+            "/vacancies/" in parsed.path
+            or "/stellenangebote/" in parsed.path
+            or "/offres-emplois/" in parsed.path
+        ):
             return self._fetch_via_html(target, run_config, http)
         return self._fetch_via_api(target, run_config, http)
 
@@ -54,10 +57,10 @@ class JobsChAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         max_pages = max(1, run_config.max_pages or 100)
         seen: set[str] = set()
-        listings: List[JobListing] = []
+        listings: list[JobListing] = []
         base = target.url
         sep = "&" if "?" in base else "?"
         for page in range(1, max_pages + 1):
@@ -94,13 +97,13 @@ class JobsChAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         params = self._extract_query_params(target.url)
-        listings: List[JobListing] = []
+        listings: list[JobListing] = []
         seen_ids = set()
         max_pages = max(1, run_config.max_pages or 200)
         for page in range(1, max_pages + 1):
-            page_params: List[Tuple[str, str]] = list(params)
+            page_params: list[tuple[str, str]] = list(params)
             page_params.append(("page", str(page)))
             page_params.append(("rows", str(PAGE_SIZE)))
             url = f"{API_BASE}?{urlencode(page_params, doseq=True)}"
@@ -125,7 +128,7 @@ class JobsChAdapter(BaseAdapter):
         logging.info("jobs.ch API: %d listings (filter IGNORED, all-jobs corpus)", len(listings))
         return listings
 
-    def _extract_query_params(self, url: str) -> List[Tuple[str, str]]:
+    def _extract_query_params(self, url: str) -> list[tuple[str, str]]:
         parsed = urlparse(url)
         return parse_qsl(parsed.query, keep_blank_values=True)
 
@@ -172,7 +175,7 @@ class JobsChAdapter(BaseAdapter):
         # Language skills (ids only — but flag presence)
         langs = doc.get("language_skills") or []
         if langs:
-            listing.language = ", ".join(str(l) for l in langs if l)
+            listing.language = ", ".join(str(lang) for lang in langs if lang)
         # Work experience hints
         we = doc.get("work_experience") or []
         if we:

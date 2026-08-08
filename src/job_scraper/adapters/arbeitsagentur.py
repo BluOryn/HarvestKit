@@ -3,16 +3,15 @@
 Public client_id `jobboerse-jobsuche` is used by the official frontend.
 We respect a small page size and add a delay.
 """
+
 import logging
-from typing import List
-from urllib.parse import urlencode, urlparse, parse_qs
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from ..config import RunConfig, TargetConfig
 from ..http import HttpClient
-from ..models import JobListing
+from ..models import JobListing, _stringify
 from ..normalize import canonicalize_url
 from .base import BaseAdapter
-
 
 CLIENT_ID = "jobboerse-jobsuche"
 BASE = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs"
@@ -24,41 +23,68 @@ class ArbeitsagenturAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         params_from_url = self._params(target.url)
         was = params_from_url.get("was", ["Software Engineer"])[0]
         wo = params_from_url.get("wo", ["Deutschland"])[0]
-        size = int(params_from_url.get("size", ["100"])[0])
-        max_pages = int(params_from_url.get("max_pages", ["20"])[0])
-        listings: List[JobListing] = []
+        size = _int_param(params_from_url, "size", 100, lo=1, hi=100)
+        umkreis = _int_param(params_from_url, "umkreis", 100, lo=0, hi=200)
+        # `max_pages` in the target URL is a HarvestKit knob, not an API param;
+        # the config-level run.max_pages caps it so --max-pages actually bites.
+        max_pages = _int_param(params_from_url, "max_pages", 20, lo=1, hi=1000)
+        if run_config.max_pages:
+            max_pages = min(max_pages, run_config.max_pages)
+
+        listings: list[JobListing] = []
         seen_ids = set()
         for page in range(1, max_pages + 1):
-            qs = urlencode({"was": was, "wo": wo, "page": page, "size": size, "umkreis": 100})
+            qs = urlencode({"was": was, "wo": wo, "page": page, "size": size, "umkreis": umkreis})
             url = f"{BASE}?{qs}"
             payload = http.get_json(url, headers={"X-API-Key": CLIENT_ID, "Accept": "application/json"})
-            if not payload:
+            if not isinstance(payload, dict):
                 break
             angebote = payload.get("stellenangebote") or []
             if not angebote:
                 break
             for item in angebote:
+                if not isinstance(item, dict):
+                    continue
                 hash_id = item.get("hashId") or item.get("refnr") or ""
-                if hash_id in seen_ids:
+                if not hash_id or hash_id in seen_ids:
                     continue
                 seen_ids.add(hash_id)
-                title = item.get("titel") or item.get("beruf") or ""
-                company = item.get("arbeitgeber") or ""
+                title = _stringify(item.get("titel") or item.get("beruf"))
+                company = _stringify(item.get("arbeitgeber"))
                 arbeitsort = item.get("arbeitsort") or {}
-                location = ", ".join([p for p in [arbeitsort.get("ort"), arbeitsort.get("region"), arbeitsort.get("land")] if p])
+                location = ", ".join(
+                    p
+                    for p in (
+                        arbeitsort.get("ort"),
+                        arbeitsort.get("region"),
+                        arbeitsort.get("land"),
+                    )
+                    if p
+                )
                 detail_url = f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{hash_id}" if hash_id else ""
                 listings.append(
                     JobListing(
                         title=title,
                         company=company,
                         location=location,
-                        employment_type=item.get("arbeitszeitmodelle") or "",
-                        posted_date=item.get("aktuelleVeroeffentlichungsdatum") or "",
-                        description=item.get("stellenbeschreibung") or "",
+                        city=_stringify(arbeitsort.get("ort")),
+                        region=_stringify(arbeitsort.get("region")),
+                        country="Germany",
+                        postal_code=_stringify(arbeitsort.get("plz")),
+                        # `arbeitszeitmodelle` is a LIST in the API — assigning it
+                        # raw produced "['Vollzeit']" in the CSV.
+                        employment_type=_stringify(item.get("arbeitszeitmodelle")),
+                        posted_date=_stringify(item.get("aktuelleVeroeffentlichungsdatum")),
+                        start_date=_stringify(item.get("eintrittsdatum")),
+                        description=_stringify(item.get("stellenbeschreibung")),
+                        external_id=_stringify(hash_id),
+                        requisition_id=_stringify(item.get("refnr")),
+                        source_ats="arbeitsagentur",
+                        source_domain="www.arbeitsagentur.de",
                         apply_url=canonicalize_url(detail_url),
                         job_url=canonicalize_url(detail_url),
                     )
@@ -73,3 +99,16 @@ class ArbeitsagenturAdapter(BaseAdapter):
     def _params(self, url: str) -> dict:
         parsed = urlparse(url)
         return parse_qs(parsed.query)
+
+
+def _int_param(params: dict, key: str, default: int, *, lo: int, hi: int) -> int:
+    """Read an int query param, clamped. A non-numeric value used to raise
+    ValueError and kill the whole target."""
+    raw = (params.get(key) or [""])[0]
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        if raw:
+            logging.warning("arbeitsagentur: ignoring non-numeric %s=%r", key, raw)
+        return default
+    return max(lo, min(hi, value))

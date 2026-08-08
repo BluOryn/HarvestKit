@@ -1,5 +1,4 @@
 import logging
-from typing import List, Optional
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -17,17 +16,19 @@ class RecruiteeAdapter(BaseAdapter):
         target: TargetConfig,
         run_config: RunConfig,
         http: HttpClient,
-    ) -> List[JobListing]:
+    ) -> list[JobListing]:
         slug = self._extract_slug(target.url)
         if not slug:
             return []
         offers = self._fetch_offers(slug, http)
         if not offers:
             return []
-        listings: List[JobListing] = []
+        listings: list[JobListing] = []
         for item in offers:
             description_html = item.get("description") or item.get("requirements") or ""
-            description = BeautifulSoup(description_html, "lxml").get_text(" ", strip=True) if description_html else ""
+            description = (
+                BeautifulSoup(description_html, "lxml").get_text(" ", strip=True) if description_html else ""
+            )
             locs = []
             for loc in item.get("locations", []) or []:
                 pieces = [loc.get(k) for k in ("city", "state", "country") if loc.get(k)]
@@ -46,7 +47,7 @@ class RecruiteeAdapter(BaseAdapter):
                     title=item.get("title") or "",
                     company=slug,
                     location=location,
-                    remote=remote_flag,
+                    remote_type=remote_flag,
                     employment_type=item.get("employment_type_code") or item.get("employment_type") or "",
                     posted_date=item.get("created_at") or "",
                     description=description,
@@ -58,7 +59,7 @@ class RecruiteeAdapter(BaseAdapter):
             logging.info("recruitee %s: %d jobs", slug, len(listings))
         return listings
 
-    def _fetch_offers(self, slug: str, http: HttpClient) -> List[dict]:
+    def _fetch_offers(self, slug: str, http: HttpClient) -> list[dict]:
         candidates = [slug, slug.replace("-", ""), slug.replace("_", "-")]
         endpoints = ("/api/offers/", "/api/offers")
         for c in candidates:
