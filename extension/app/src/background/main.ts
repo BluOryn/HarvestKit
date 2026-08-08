@@ -1,7 +1,16 @@
 import { db } from "../lib/db";
-import { fingerprint, type Job } from "../lib/schema";
 import { fingerprintRecord, type GeneralRecord } from "../lib/generalSchema";
-import { startCrawlRun, handleJobMessage, retryFailed, startGeneralCrawlRun, handleGeneralMessage } from "./bulk";
+import { emptyJob, fingerprint, type Job } from "../lib/schema";
+import {
+  handleGeneralMessage,
+  handleJobMessage,
+  retryFailed,
+  startCrawlRun,
+  startGeneralCrawlRun,
+} from "./bulk";
+import { installKeepaliveListener } from "./keepalive";
+
+installKeepaliveListener();
 
 chrome.runtime.onInstalled.addListener(async () => {
   const cur = await chrome.storage.local.get(["autoSave", "showBanner", "theme"]);
@@ -90,7 +99,7 @@ chrome.runtime.onMessage.addListener((msg: any, sender, sendResponse) => {
           });
           for (const c of cards) {
             const job: Job = {
-              ...emptyJobLike(),
+              ...emptyJob(),
               title: c.title || "",
               company: c.company || "",
               location: c.location || "",
@@ -167,7 +176,7 @@ chrome.runtime.onMessage.addListener((msg: any, sender, sendResponse) => {
           for (const c of allCards) {
             try {
               await saveJob({
-                ...emptyJobLike(),
+                ...emptyJob(),
                 title: c.title || "", company: c.company || "", location: c.location || "",
                 description: c.snippet || "", apply_url: c.url || "", job_url: c.url || "",
                 source_domain: domain, source_ats: "full-pipeline", confidence: "0.50",
@@ -234,22 +243,3 @@ chrome.runtime.onMessage.addListener((msg: any, sender, sendResponse) => {
   })();
   return true;
 });
-
-function emptyJobLike(): Record<string, any> {
-  return {
-    title: "", company: "", company_logo: "", company_size: "", company_industry: "", company_website: "",
-    department: "", team: "", location: "", city: "", region: "", country: "", postal_code: "",
-    remote_type: "", employment_type: "", seniority: "",
-    salary_min: "", salary_max: "", salary_currency: "", salary_period: "", equity: "",
-    posted_date: "", valid_through: "", start_date: "", language: "",
-    description: "", responsibilities: "", requirements: "", qualifications: "", benefits: "",
-    tech_stack: "", skills: "", education_required: "", experience_years: "",
-    work_authorization: "", visa_sponsorship: "", relocation: "", travel_required: "",
-    recruiter_name: "", recruiter_title: "", recruiter_email: "", recruiter_phone: "", recruiter_linkedin: "",
-    hiring_manager: "", hiring_manager_email: "", application_email: "", application_phone: "",
-    apply_url: "", job_url: "", external_id: "", requisition_id: "",
-    source_ats: "", source_domain: "", raw_jsonld: "",
-    confidence: "", scraped_at: "",
-    tags: [], notes: "", starred: false,
-  };
-}

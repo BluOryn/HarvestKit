@@ -7,221 +7,100 @@
  * the same host simultaneously and got soft-blocked / consent-walled).
  *
  * Design:
- *  - one global semaphore (overall concurrency)
- *  - one per-host queue (default 1 concurrent per host, 1500 ms delay between launches)
- *  - retry on timeout / extraction-empty up to 2x with exponential backoff
- *  - persist every failure to db.failures so the UI can re-run
+ *  - scheduling lives in ./scheduler (shared by the job and general crawls)
+ *  - the service worker is held awake for the run (see ./keepalive)
+ *  - retry on timeout / extraction-empty up to N times with exponential backoff
+ *  - every failure is persisted to db.failures so the UI can re-run it
  */
-import { db, type Run, type Failure } from "../lib/db";
-import type { Job } from "../lib/schema";
-import { fingerprint } from "../lib/schema";
-import type { GeneralRecord } from "../lib/generalSchema";
-import { fingerprintRecord } from "../lib/generalSchema";
+import { db, type Failure, type Run } from "../lib/db";
+import { fingerprintRecord, type GeneralRecord } from "../lib/generalSchema";
+import { fingerprint, type Job } from "../lib/schema";
+import { withKeepalive } from "./keepalive";
+import { runHostScheduled, sleep, type SchedulerOpts } from "./scheduler";
 
-type Pending = {
+type Pending<T> = {
   url: string;
-  resolve: (job: Job | null) => void;
+  resolve: (value: T | null) => void;
   reject: (err: Error) => void;
-  timer: number;
-};
-
-type GeneralPending = {
-  url: string;
-  resolve: (rec: GeneralRecord | null) => void;
-  reject: (err: Error) => void;
-  timer: number;
+  timer: ReturnType<typeof setTimeout>;
 };
 
 type CrawlOpts = {
-  concurrency?: number;       // overall (default 4)
+  concurrency?: number; // overall (default 4)
   perHostConcurrency?: number; // per-host (default 1)
-  perHostDelayMs?: number;     // min spacing between requests to same host (default 1500)
-  timeoutMs?: number;          // per-URL hard timeout (default 45000)
-  retries?: number;            // attempts after first failure (default 2)
+  perHostDelayMs?: number; // min spacing between requests to same host (default 1500)
+  timeoutMs?: number; // per-URL hard timeout (default 45000)
+  retries?: number; // attempts after first failure (default 2)
 };
 
-const PENDING = new Map<number, Pending>();
-const GENERAL_PENDING = new Map<number, GeneralPending>();
+type ResolvedOpts = SchedulerOpts & { timeoutMs: number; retries: number };
+
+const PENDING = new Map<number, Pending<Job>>();
+const GENERAL_PENDING = new Map<number, Pending<GeneralRecord>>();
 
 const DEFAULT_TIMEOUT_MS = 45000;
 const DEFAULT_PER_HOST_DELAY_MS = 1500;
 const DEFAULT_RETRIES = 2;
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-function hostOf(u: string): string {
-  try { return new URL(u).hostname; } catch { return u; }
+function clamp(n: number, lo: number, hi: number) {
+  return Math.max(lo, Math.min(hi, n));
 }
 
-export async function startCrawlRun(urls: string[], opts: CrawlOpts = {}) {
-  const concurrency = clamp(opts.concurrency ?? 4, 1, 8);
-  const perHostConcurrency = clamp(opts.perHostConcurrency ?? 1, 1, 4);
-  const perHostDelayMs = Math.max(0, opts.perHostDelayMs ?? DEFAULT_PER_HOST_DELAY_MS);
-  const timeoutMs = Math.max(10000, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const retries = clamp(opts.retries ?? DEFAULT_RETRIES, 0, 5);
-
-  const id = await db.runs.add({
-    started_at: Date.now(),
-    source_url: urls[0] || "",
-    total: urls.length,
-    done: 0,
-    ok: 0,
-    failed: 0,
-    status: "running",
-    type: "deep-crawl",
-  });
-  void runCrawl(id as number, urls, { concurrency, perHostConcurrency, perHostDelayMs, timeoutMs, retries });
-  return id as number;
-}
-
-export async function retryFailed(runId: number, opts: CrawlOpts = {}) {
-  const failures = await db.failures.where({ run_id: runId, resolved: 0 }).toArray();
-  if (failures.length === 0) return null;
-  const urls = Array.from(new Set(failures.map((f) => f.url)));
-  return startCrawlRun(urls, opts);
-}
-
-function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)); }
-
-async function runCrawl(runId: number, urls: string[], opts: Required<Omit<CrawlOpts, never>>) {
-  const update = async (patch: Partial<Run>) => {
-    const r = await db.runs.get(runId);
-    if (!r) return;
-    Object.assign(r, patch);
-    await db.runs.put(r);
+function resolveOpts(opts: CrawlOpts): ResolvedOpts {
+  return {
+    concurrency: clamp(opts.concurrency ?? 4, 1, 8),
+    perHostConcurrency: clamp(opts.perHostConcurrency ?? 1, 1, 4),
+    perHostDelayMs: Math.max(0, opts.perHostDelayMs ?? DEFAULT_PER_HOST_DELAY_MS),
+    timeoutMs: Math.max(10000, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+    retries: clamp(opts.retries ?? DEFAULT_RETRIES, 0, 5),
   };
-  const incOk = async () => { const r = await db.runs.get(runId); if (r) { r.ok = (r.ok || 0) + 1; r.done = (r.done || 0) + 1; await db.runs.put(r); } };
-  const incFail = async () => { const r = await db.runs.get(runId); if (r) { r.failed = (r.failed || 0) + 1; r.done = (r.done || 0) + 1; await db.runs.put(r); } };
-
-  // Per-host queues
-  const hostQueues = new Map<string, string[]>();
-  const hostInflight = new Map<string, number>();
-  const hostLastLaunch = new Map<string, number>();
-  for (const u of urls) {
-    const h = hostOf(u);
-    if (!hostQueues.has(h)) hostQueues.set(h, []);
-    hostQueues.get(h)!.push(u);
-  }
-  // Hosts with smaller queues finish first → interleave so global concurrency is well-used.
-  const hostKeys = Array.from(hostQueues.keys());
-
-  let globalInflight = 0;
-  const inflightLimit = opts.concurrency;
-  let cancelled = false;
-
-  // Wait helper — releases when a slot frees up
-  let resolveSlot: (() => void) | null = null;
-  const waitSlot = () => new Promise<void>((res) => { resolveSlot = res; });
-  const releaseSlot = () => { const r = resolveSlot; resolveSlot = null; if (r) r(); };
-
-  const tryDequeueFor = (h: string): string | null => {
-    const q = hostQueues.get(h);
-    if (!q || q.length === 0) return null;
-    if ((hostInflight.get(h) || 0) >= opts.perHostConcurrency) return null;
-    const last = hostLastLaunch.get(h) || 0;
-    if (Date.now() - last < opts.perHostDelayMs) return null;
-    return q.shift()!;
-  };
-
-  const tryDequeueAny = (): { host: string; url: string } | null => {
-    for (const h of hostKeys) {
-      const u = tryDequeueFor(h);
-      if (u) return { host: h, url: u };
-    }
-    return null;
-  };
-
-  const totalQueued = () => Array.from(hostQueues.values()).reduce((a, q) => a + q.length, 0);
-
-  while ((totalQueued() > 0 || globalInflight > 0) && !cancelled) {
-    const r = await db.runs.get(runId);
-    if (r?.status === "cancelled") { cancelled = true; break; }
-
-    // Launch as many as possible
-    while (globalInflight < inflightLimit) {
-      const next = tryDequeueAny();
-      if (!next) break;
-      globalInflight++;
-      hostInflight.set(next.host, (hostInflight.get(next.host) || 0) + 1);
-      hostLastLaunch.set(next.host, Date.now());
-      void (async () => {
-        try {
-          const job = await visitWithRetry(runId, next.url, opts);
-          if (job) {
-            job.id = fingerprint(job);
-            job.saved_at = Date.now();
-            await db.jobs.put(job);
-            await incOk();
-          } else {
-            await incFail();
-          }
-        } catch (e: any) {
-          await incFail();
-          await recordFailure(runId, next.url, String(e?.message || e));
-        } finally {
-          globalInflight--;
-          hostInflight.set(next.host, Math.max(0, (hostInflight.get(next.host) || 0) - 1));
-          releaseSlot();
-        }
-      })();
-    }
-
-    // Wait either for a slot to free up, or for a per-host delay to elapse.
-    // Use min(perHostDelay - elapsed for any non-empty host) as the cap.
-    if (globalInflight > 0 && totalQueued() === 0) {
-      // All inflight; just wait for one to finish.
-      await waitSlot();
-    } else if (globalInflight === 0 && totalQueued() > 0) {
-      // Nothing inflight but we couldn't launch — must be perHostDelay gating.
-      let minWait = opts.perHostDelayMs;
-      for (const h of hostKeys) {
-        const q = hostQueues.get(h);
-        if (!q || q.length === 0) continue;
-        const last = hostLastLaunch.get(h) || 0;
-        const wait = Math.max(0, opts.perHostDelayMs - (Date.now() - last));
-        if (wait < minWait) minWait = wait;
-      }
-      await sleep(Math.max(50, minWait));
-    } else {
-      // Both — race a slot release against the smallest per-host delay.
-      let minWait = opts.perHostDelayMs;
-      for (const h of hostKeys) {
-        const q = hostQueues.get(h);
-        if (!q || q.length === 0) continue;
-        if ((hostInflight.get(h) || 0) >= opts.perHostConcurrency) continue;
-        const last = hostLastLaunch.get(h) || 0;
-        const wait = Math.max(0, opts.perHostDelayMs - (Date.now() - last));
-        if (wait < minWait) minWait = wait;
-      }
-      await Promise.race([waitSlot(), sleep(Math.max(50, minWait))]);
-    }
-  }
-
-  await update({ status: cancelled ? "cancelled" : "done", finished_at: Date.now() });
 }
 
-async function visitWithRetry(runId: number, url: string, opts: { timeoutMs: number; retries: number }): Promise<Job | null> {
-  let lastError: string = "";
-  for (let attempt = 0; attempt <= opts.retries; attempt++) {
-    try {
-      const job = await visitAndExtract(url, opts.timeoutMs);
-      if (job && (job.title || job.description)) {
-        // Mark prior failures resolved if any
-        await db.failures.where({ run_id: runId, url, resolved: 0 }).modify({ resolved: 1 });
-        return job;
-      }
-      lastError = "no-content";
-    } catch (e: any) {
-      lastError = String(e?.message || e);
-    }
-    // exponential backoff, jittered
-    if (attempt < opts.retries) {
-      const base = 2000 * Math.pow(2, attempt);
-      await sleep(base + Math.random() * 1000);
-    }
+/** De-duplicate the URL list up front — the same posting often appears on
+ *  several listing pages, and each duplicate costs a whole tab + page load. */
+function uniqueUrls(urls: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of urls) {
+    const url = (raw || "").trim();
+    if (!url || seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
   }
-  await recordFailure(runId, url, lastError || "unknown");
-  return null;
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Run bookkeeping
+// ---------------------------------------------------------------------------
+
+function makeCounters(runId: number) {
+  // Serialise read-modify-write on the run row. Concurrent workers doing
+  // get() → mutate → put() lost increments, so `done` under-reported.
+  let chain: Promise<void> = Promise.resolve();
+  const update = (mutate: (run: Run) => void) => {
+    chain = chain.then(async () => {
+      const run = await db.runs.get(runId);
+      if (!run) return;
+      mutate(run);
+      await db.runs.put(run);
+    });
+    return chain;
+  };
+  return {
+    ok: () =>
+      update((r) => {
+        r.ok = (r.ok || 0) + 1;
+        r.done = (r.done || 0) + 1;
+      }),
+    fail: () =>
+      update((r) => {
+        r.failed = (r.failed || 0) + 1;
+        r.done = (r.done || 0) + 1;
+      }),
+    patch: (p: Partial<Run>) => update((r) => Object.assign(r, p)),
+    flush: () => chain,
+  };
 }
 
 async function recordFailure(runId: number, url: string, reason: string) {
@@ -233,40 +112,201 @@ async function recordFailure(runId: number, url: string, reason: string) {
     existing.resolved = 0;
     await db.failures.put(existing);
   } else {
-    const f: Failure = { run_id: runId, url, reason, attempts: 1, last_attempt_at: Date.now(), resolved: 0 };
+    const f: Failure = {
+      run_id: runId,
+      url,
+      reason,
+      attempts: 1,
+      last_attempt_at: Date.now(),
+      resolved: 0,
+    };
     await db.failures.add(f);
   }
 }
 
-function visitAndExtract(url: string, timeoutMs: number): Promise<Job | null> {
-  return new Promise((resolve, reject) => {
+// ---------------------------------------------------------------------------
+// Job crawl
+// ---------------------------------------------------------------------------
+
+export async function startCrawlRun(urls: string[], opts: CrawlOpts = {}) {
+  const list = uniqueUrls(urls);
+  const resolved = resolveOpts(opts);
+  const id = (await db.runs.add({
+    started_at: Date.now(),
+    source_url: list[0] || "",
+    total: list.length,
+    done: 0,
+    ok: 0,
+    failed: 0,
+    status: "running",
+    type: "deep-crawl",
+  })) as number;
+
+  void withKeepalive(() => runCrawl(id, list, resolved));
+  return id;
+}
+
+export async function retryFailed(runId: number, opts: CrawlOpts = {}) {
+  const failures = await db.failures.where({ run_id: runId, resolved: 0 }).toArray();
+  if (failures.length === 0) return null;
+  return startCrawlRun(
+    failures.map((f) => f.url),
+    opts,
+  );
+}
+
+async function runCrawl(runId: number, urls: string[], opts: ResolvedOpts) {
+  const counters = makeCounters(runId);
+
+  const { cancelled } = await runHostScheduled(
+    urls,
+    opts,
+    async (url) => {
+      try {
+        const job = await visitWithRetry(runId, url, opts);
+        if (job) {
+          job.id = fingerprint(job);
+          job.saved_at = Date.now();
+          await db.jobs.put(job);
+          await counters.ok();
+        } else {
+          await counters.fail();
+        }
+      } catch (e: any) {
+        await counters.fail();
+        await recordFailure(runId, url, String(e?.message || e));
+      }
+    },
+    async () => (await db.runs.get(runId))?.status === "cancelled",
+  );
+
+  await counters.flush();
+  await counters.patch({ status: cancelled ? "cancelled" : "done", finished_at: Date.now() });
+}
+
+async function visitWithRetry(
+  runId: number,
+  url: string,
+  opts: { timeoutMs: number; retries: number },
+): Promise<Job | null> {
+  let lastError = "";
+  for (let attempt = 0; attempt <= opts.retries; attempt++) {
+    try {
+      const job = await visitAndExtract(url, opts.timeoutMs);
+      if (job && (job.title || job.description)) {
+        await db.failures.where({ run_id: runId, url, resolved: 0 }).modify({ resolved: 1 });
+        return job;
+      }
+      lastError = "no-content";
+    } catch (e: any) {
+      lastError = String(e?.message || e);
+    }
+    // Exponential backoff with jitter — skipped after the final attempt.
+    if (attempt < opts.retries) {
+      await sleep(2000 * 2 ** attempt + Math.random() * 1000);
+    }
+  }
+  await recordFailure(runId, url, lastError || "unknown");
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Hidden-tab visit
+// ---------------------------------------------------------------------------
+
+/**
+ * Open `url` in a background tab and wait for its content script to report.
+ *
+ * The content script fires JOB_FOUND on its own, but only when its detector is
+ * confident. We also poke it directly once the page has had time to settle, so
+ * a page the detector scores just under threshold still gets extracted instead
+ * of burning the full timeout.
+ */
+function visitInTab<T>(
+  url: string,
+  timeoutMs: number,
+  registry: Map<number, Pending<T>>,
+  pokeMessage: { type: string },
+  readResult: (response: any) => T | null,
+): Promise<T | null> {
+  return new Promise<T | null>((resolve, reject) => {
     chrome.tabs.create({ url, active: false }, (tab) => {
       if (chrome.runtime.lastError || !tab?.id) {
         reject(new Error(chrome.runtime.lastError?.message || "tab-create-failed"));
         return;
       }
       const tabId = tab.id;
-      const timer = setTimeout(async () => {
-        try { await chrome.tabs.remove(tabId); } catch {}
-        PENDING.delete(tabId);
-        reject(new Error("timeout"));
-      }, timeoutMs) as unknown as number;
-      PENDING.set(tabId, { url, resolve, reject, timer });
+
+      const settle = (fn: () => void) => {
+        const entry = registry.get(tabId);
+        if (!entry) return false; // already settled elsewhere
+        clearTimeout(entry.timer);
+        registry.delete(tabId);
+        chrome.tabs.remove(tabId).catch(() => {});
+        fn();
+        return true;
+      };
+
+      const timer = setTimeout(() => {
+        settle(() => reject(new Error("timeout")));
+      }, timeoutMs);
+
+      registry.set(tabId, { url, resolve, reject, timer });
+
+      // Nudge the content script once the page has had a chance to render.
+      setTimeout(
+        () => {
+          if (!registry.has(tabId)) return;
+          chrome.tabs
+            .sendMessage(tabId, pokeMessage)
+            .then((response) => {
+              const value = readResult(response);
+              if (value) settle(() => resolve(value));
+            })
+            .catch(() => {
+              // Content script not ready (PDF, chrome:// redirect, still
+              // loading). The timeout path handles it.
+            });
+        },
+        Math.min(8000, Math.max(1500, timeoutMs / 3)),
+      );
     });
   });
 }
 
-export function handleJobMessage(msg: any, sender: chrome.runtime.MessageSender) {
+function visitAndExtract(url: string, timeoutMs: number): Promise<Job | null> {
+  return visitInTab<Job>(url, timeoutMs, PENDING, { type: "EXTRACT_NOW" }, (r) =>
+    r?.job && (r.job.title || r.job.description) ? (r.job as Job) : null,
+  );
+}
+
+function visitGeneral(url: string, timeoutMs: number): Promise<GeneralRecord | null> {
+  return visitInTab<GeneralRecord>(url, timeoutMs, GENERAL_PENDING, { type: "EXTRACT_GENERAL" }, (r) =>
+    r?.record?.name ? (r.record as GeneralRecord) : null,
+  );
+}
+
+function handlePush<T>(
+  registry: Map<number, Pending<T>>,
+  sender: chrome.runtime.MessageSender,
+  value: T | null,
+) {
   const tabId = sender.tab?.id;
-  if (!tabId) return;
-  const entry = PENDING.get(tabId);
+  if (tabId == null) return;
+  const entry = registry.get(tabId);
   if (!entry) return;
-  if (msg?.type === "JOB_FOUND") {
-    clearTimeout(entry.timer);
-    PENDING.delete(tabId);
-    chrome.tabs.remove(tabId).catch(() => {});
-    entry.resolve(msg.job);
-  }
+  clearTimeout(entry.timer);
+  registry.delete(tabId);
+  chrome.tabs.remove(tabId).catch(() => {});
+  entry.resolve(value);
+}
+
+export function handleJobMessage(msg: any, sender: chrome.runtime.MessageSender) {
+  if (msg?.type === "JOB_FOUND") handlePush(PENDING, sender, msg.job ?? null);
+}
+
+export function handleGeneralMessage(msg: any, sender: chrome.runtime.MessageSender) {
+  if (msg?.type === "RECORD_FOUND") handlePush(GENERAL_PENDING, sender, msg.record ?? null);
 }
 
 // ---------------------------------------------------------------------------
@@ -274,183 +314,72 @@ export function handleJobMessage(msg: any, sender: chrome.runtime.MessageSender)
 // ---------------------------------------------------------------------------
 
 export async function startGeneralCrawlRun(urls: string[], opts: CrawlOpts = {}) {
-  const concurrency = clamp(opts.concurrency ?? 4, 1, 8);
-  const perHostConcurrency = clamp(opts.perHostConcurrency ?? 1, 1, 4);
-  const perHostDelayMs = Math.max(0, opts.perHostDelayMs ?? DEFAULT_PER_HOST_DELAY_MS);
-  const timeoutMs = Math.max(10000, opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const retries = clamp(opts.retries ?? DEFAULT_RETRIES, 0, 5);
-
-  const id = await db.runs.add({
+  const list = uniqueUrls(urls);
+  const resolved = resolveOpts(opts);
+  const id = (await db.runs.add({
     started_at: Date.now(),
-    source_url: urls[0] || "",
-    total: urls.length,
+    source_url: list[0] || "",
+    total: list.length,
     done: 0,
     ok: 0,
     failed: 0,
     status: "running",
     type: "general-scrape",
     mode: "general",
-  });
-  void runGeneralCrawl(id as number, urls, { concurrency, perHostConcurrency, perHostDelayMs, timeoutMs, retries });
-  return id as number;
+  })) as number;
+
+  void withKeepalive(() => runGeneralCrawl(id, list, resolved));
+  return id;
 }
 
-async function runGeneralCrawl(runId: number, urls: string[], opts: Required<Omit<CrawlOpts, never>>) {
-  const update = async (patch: Partial<Run>) => {
-    const r = await db.runs.get(runId);
-    if (!r) return;
-    Object.assign(r, patch);
-    await db.runs.put(r);
-  };
-  const incOk = async () => { const r = await db.runs.get(runId); if (r) { r.ok = (r.ok || 0) + 1; r.done = (r.done || 0) + 1; await db.runs.put(r); } };
-  const incFail = async () => { const r = await db.runs.get(runId); if (r) { r.failed = (r.failed || 0) + 1; r.done = (r.done || 0) + 1; await db.runs.put(r); } };
+async function runGeneralCrawl(runId: number, urls: string[], opts: ResolvedOpts) {
+  const counters = makeCounters(runId);
 
-  const hostQueues = new Map<string, string[]>();
-  const hostInflight = new Map<string, number>();
-  const hostLastLaunch = new Map<string, number>();
-  for (const u of urls) {
-    const h = hostOf(u);
-    if (!hostQueues.has(h)) hostQueues.set(h, []);
-    hostQueues.get(h)!.push(u);
-  }
-  const hostKeys = Array.from(hostQueues.keys());
-
-  let globalInflight = 0;
-  let cancelled = false;
-  let resolveSlot: (() => void) | null = null;
-  const waitSlot = () => new Promise<void>((res) => { resolveSlot = res; });
-  const releaseSlot = () => { const r = resolveSlot; resolveSlot = null; if (r) r(); };
-
-  const tryDequeueFor = (h: string): string | null => {
-    const q = hostQueues.get(h);
-    if (!q || q.length === 0) return null;
-    if ((hostInflight.get(h) || 0) >= opts.perHostConcurrency) return null;
-    const last = hostLastLaunch.get(h) || 0;
-    if (Date.now() - last < opts.perHostDelayMs) return null;
-    return q.shift()!;
-  };
-  const tryDequeueAny = (): { host: string; url: string } | null => {
-    for (const h of hostKeys) { const u = tryDequeueFor(h); if (u) return { host: h, url: u }; }
-    return null;
-  };
-  const totalQueued = () => Array.from(hostQueues.values()).reduce((a, q) => a + q.length, 0);
-
-  while ((totalQueued() > 0 || globalInflight > 0) && !cancelled) {
-    const r = await db.runs.get(runId);
-    if (r?.status === "cancelled") { cancelled = true; break; }
-    while (globalInflight < opts.concurrency) {
-      const next = tryDequeueAny();
-      if (!next) break;
-      globalInflight++;
-      hostInflight.set(next.host, (hostInflight.get(next.host) || 0) + 1);
-      hostLastLaunch.set(next.host, Date.now());
-      void (async () => {
-        try {
-          const rec = await visitGeneralWithRetry(runId, next.url, opts);
-          if (rec) {
-            rec.id = fingerprintRecord(rec);
-            rec.saved_at = Date.now();
-            await db.records.put(rec);
-            await incOk();
-          } else {
-            await incFail();
-          }
-        } catch (e: any) {
-          await incFail();
-          await recordFailure(runId, next.url, String(e?.message || e));
-        } finally {
-          globalInflight--;
-          hostInflight.set(next.host, Math.max(0, (hostInflight.get(next.host) || 0) - 1));
-          releaseSlot();
+  const { cancelled } = await runHostScheduled(
+    urls,
+    opts,
+    async (url) => {
+      try {
+        const record = await visitGeneralWithRetry(runId, url, opts);
+        if (record) {
+          record.id = fingerprintRecord(record);
+          record.saved_at = Date.now();
+          await db.records.put(record);
+          await counters.ok();
+        } else {
+          await counters.fail();
         }
-      })();
-    }
-    if (globalInflight > 0 && totalQueued() === 0) {
-      await waitSlot();
-    } else if (globalInflight === 0 && totalQueued() > 0) {
-      let minWait = opts.perHostDelayMs;
-      for (const h of hostKeys) {
-        const q = hostQueues.get(h); if (!q || q.length === 0) continue;
-        const last = hostLastLaunch.get(h) || 0;
-        const wait = Math.max(0, opts.perHostDelayMs - (Date.now() - last));
-        if (wait < minWait) minWait = wait;
+      } catch (e: any) {
+        await counters.fail();
+        await recordFailure(runId, url, String(e?.message || e));
       }
-      await sleep(Math.max(50, minWait));
-    } else {
-      let minWait = opts.perHostDelayMs;
-      for (const h of hostKeys) {
-        const q = hostQueues.get(h); if (!q || q.length === 0) continue;
-        if ((hostInflight.get(h) || 0) >= opts.perHostConcurrency) continue;
-        const last = hostLastLaunch.get(h) || 0;
-        const wait = Math.max(0, opts.perHostDelayMs - (Date.now() - last));
-        if (wait < minWait) minWait = wait;
-      }
-      await Promise.race([waitSlot(), sleep(Math.max(50, minWait))]);
-    }
-  }
-  await update({ status: cancelled ? "cancelled" : "done", finished_at: Date.now() });
+    },
+    async () => (await db.runs.get(runId))?.status === "cancelled",
+  );
+
+  await counters.flush();
+  await counters.patch({ status: cancelled ? "cancelled" : "done", finished_at: Date.now() });
 }
 
-async function visitGeneralWithRetry(runId: number, url: string, opts: { timeoutMs: number; retries: number }): Promise<GeneralRecord | null> {
+async function visitGeneralWithRetry(
+  runId: number,
+  url: string,
+  opts: { timeoutMs: number; retries: number },
+): Promise<GeneralRecord | null> {
   let lastError = "";
   for (let attempt = 0; attempt <= opts.retries; attempt++) {
     try {
-      const rec = await visitGeneral(url, opts.timeoutMs);
-      if (rec && rec.name) {
+      const record = await visitGeneral(url, opts.timeoutMs);
+      if (record?.name) {
         await db.failures.where({ run_id: runId, url, resolved: 0 }).modify({ resolved: 1 });
-        return rec;
+        return record;
       }
       lastError = "no-content";
     } catch (e: any) {
       lastError = String(e?.message || e);
     }
-    if (attempt < opts.retries) await sleep(2000 * Math.pow(2, attempt) + Math.random() * 1000);
+    if (attempt < opts.retries) await sleep(2000 * 2 ** attempt + Math.random() * 1000);
   }
   await recordFailure(runId, url, lastError || "unknown");
   return null;
-}
-
-function visitGeneral(url: string, timeoutMs: number): Promise<GeneralRecord | null> {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.create({ url, active: false }, (tab) => {
-      if (chrome.runtime.lastError || !tab?.id) {
-        reject(new Error(chrome.runtime.lastError?.message || "tab-create-failed"));
-        return;
-      }
-      const tabId = tab.id;
-      const timer = setTimeout(async () => {
-        try { await chrome.tabs.remove(tabId); } catch {}
-        GENERAL_PENDING.delete(tabId);
-        reject(new Error("timeout"));
-      }, timeoutMs) as unknown as number;
-      GENERAL_PENDING.set(tabId, { url, resolve, reject, timer });
-      // Trigger extraction shortly after page settles.
-      setTimeout(async () => {
-        try {
-          const r = await chrome.tabs.sendMessage(tabId, { type: "EXTRACT_GENERAL" });
-          const entry = GENERAL_PENDING.get(tabId);
-          if (!entry) return;
-          clearTimeout(entry.timer);
-          GENERAL_PENDING.delete(tabId);
-          chrome.tabs.remove(tabId).catch(() => {});
-          entry.resolve(r?.record || null);
-        } catch (e: any) {
-          // entry will time out and reject
-        }
-      }, Math.min(8000, timeoutMs / 3));
-    });
-  });
-}
-
-export function handleGeneralMessage(msg: any, sender: chrome.runtime.MessageSender) {
-  const tabId = sender.tab?.id;
-  if (!tabId) return;
-  const entry = GENERAL_PENDING.get(tabId);
-  if (!entry) return;
-  if (msg?.type === "RECORD_FOUND") {
-    clearTimeout(entry.timer);
-    GENERAL_PENDING.delete(tabId);
-    chrome.tabs.remove(tabId).catch(() => {});
-    entry.resolve(msg.record);
-  }
 }
