@@ -53,7 +53,7 @@ def test_a_public_address_is_allowed(monkeypatch):
 
 def test_a_hostname_resolving_to_a_private_address_is_refused(monkeypatch):
     """DNS rebinding: the name looks fine, the address does not."""
-    monkeypatch.setattr(net_guard, "_resolves_to_public", lambda host: False if host == "evil.test" else True)
+    monkeypatch.setattr(net_guard, "_resolves_to_public", lambda host: host != "evil.test")
     assert is_safe_url("https://evil.test/team") is False
 
 
