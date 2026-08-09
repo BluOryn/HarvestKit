@@ -111,3 +111,34 @@ def test_tech_stack_is_unioned_across_a_companys_listings():
     ]
     company = companies_from_listings(listings, StubHttp())[0]
     assert "python" in company.tech_stack and "kubernetes" in company.tech_stack
+
+
+def test_guess_domains_filters_by_dns_before_returning(monkeypatch):
+    """A guess for a domain that does not exist must never reach the HTTP
+    resolver: each one costs a full connect timeout there and milliseconds here."""
+    from leadgen.seed import atsboards
+
+    monkeypatch.setattr(atsboards, "_resolves_to_public", lambda host: host == "acme.de")
+    assert atsboards.guess_domains("acme") == ["https://acme.de/"]
+
+
+def test_guess_domains_is_capped(monkeypatch):
+    from leadgen.seed import atsboards
+
+    monkeypatch.setattr(atsboards, "_resolves_to_public", lambda host: True)
+    assert len(atsboards.guess_domains("acme")) == atsboards.MAX_GUESSES
+
+
+def test_guess_domains_tries_slug_and_company_name_variants(monkeypatch):
+    from leadgen.seed import atsboards
+
+    seen = []
+
+    def fake(host):
+        seen.append(host)
+        return False
+
+    monkeypatch.setattr(atsboards, "_resolves_to_public", fake)
+    atsboards.guess_domains("trade-republic", "Trade Republic")
+    assert "traderepublic.com" in seen
+    assert "trade-republic.com" in seen

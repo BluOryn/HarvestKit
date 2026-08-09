@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 
 from ..assemble import CompanyContext
 from ..company.domain import resolve_domain
@@ -61,7 +62,9 @@ def _company_key(listing) -> str:
     return (getattr(listing, "company", "") or "").strip().lower()
 
 
-def companies_from_listings(listings: list, http, *, guess_domains=None) -> list[CompanyContext]:
+def companies_from_listings(
+    listings: list, http, *, guess_domains=None, concurrency: int = 12
+) -> list[CompanyContext]:
     """Collapse listings to unique companies with resolved domains.
 
     One domain probe per company, not per listing — a company with forty open
@@ -79,8 +82,7 @@ def companies_from_listings(listings: list, http, *, guess_domains=None) -> list
             continue
         grouped.setdefault(_company_key(listing), []).append(listing)
 
-    companies: list[CompanyContext] = []
-    for group in grouped.values():
+    def build(group: list) -> CompanyContext | None:
         first = group[0]
         hints: list[str] = []
         for listing in group:
@@ -95,7 +97,7 @@ def companies_from_listings(listings: list, http, *, guess_domains=None) -> list
         domain = resolve_domain(first.company, hints, http)
         if not domain:
             log.debug("seed: no own-domain for %r, dropping", first.company)
-            continue
+            return None
 
         anchors: list[tuple[str, str]] = []
         tech: set[str] = set()
@@ -112,19 +114,24 @@ def companies_from_listings(listings: list, http, *, guess_domains=None) -> list
                 if token.strip():
                     tech.add(token.strip().lower())
 
-        companies.append(
-            CompanyContext(
-                name=first.company,
-                domain=domain,
-                website=f"https://{domain}",
-                country=_first(getattr(item, "country", "") for item in group),
-                region=_first(getattr(item, "region", "") for item in group),
-                city=_first(getattr(item, "city", "") for item in group),
-                size_hint=_first(getattr(item, "company_size", "") for item in group),
-                industry=_first(getattr(item, "company_industry", "") for item in group),
-                tech_stack=", ".join(sorted(tech)),
-                seed_url=first.job_url or getattr(first, "apply_url", ""),
-                extra_anchors=anchors,
-            )
+        return CompanyContext(
+            name=first.company,
+            domain=domain,
+            website=f"https://{domain}",
+            country=_first(getattr(item, "country", "") for item in group),
+            region=_first(getattr(item, "region", "") for item in group),
+            city=_first(getattr(item, "city", "") for item in group),
+            size_hint=_first(getattr(item, "company_size", "") for item in group),
+            industry=_first(getattr(item, "company_industry", "") for item in group),
+            tech_stack=", ".join(sorted(tech)),
+            seed_url=first.job_url or getattr(first, "apply_url", ""),
+            extra_anchors=anchors,
         )
-    return companies
+
+    # Domain resolution is the slowest step in the whole run: several candidate
+    # hosts per company, each costing a connect timeout when the guess is wrong.
+    # Serially that is hours for a few hundred companies, and it is pure I/O
+    # wait, so it parallelises cleanly. Per-host throttling still applies.
+    with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
+        resolved = list(pool.map(build, grouped.values()))
+    return [company for company in resolved if company is not None]

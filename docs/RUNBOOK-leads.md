@@ -62,7 +62,10 @@ Useful flags:
 
 | Flag | Why |
 |---|---|
+| `--boards FILE` | Seed from public Greenhouse/Lever boards listed in `configs/leads/boards.txt` |
+| `--roles hr,tech_leadership` | Role families to keep. Default. `--roles any` keeps everyone |
 | `--no-smtp` | Skip catch-all probing. Faster; rows land `inferred_*` instead of `verified` |
+| `--no-guess` | Never apply the modal `first.last` format to a domain with no published address. Raises precision, cuts volume hard |
 | `--overfetch 4` | Bank 4× the target before cutting. Higher = better final quality, longer run |
 | `--concurrency 12` | More parallel companies. Per-host throttling still applies |
 | `--max-person-pages 0` | Disable sitemap mining if it proves slow on your network |
@@ -95,8 +98,8 @@ so European names import correctly without any encoding dance.
 
 | Column | Meaning |
 |---|---|
-| `email_status` | `published` (printed on their site) > `verified` (SMTP confirmed) > `inferred_high` (pattern from 2+ known addresses) > `inferred_medium` (pattern from 1) > `unknown` (probe refused) > `catch_all` (domain accepts everything — unverifiable) |
-| `email_confidence` | `high` / `medium` — set only for inferred rows |
+| `email_status` | `published` (printed on their site) > `verified` (SMTP confirmed) > `inferred_high` (pattern from 2+ known addresses) > `inferred_medium` (pattern from 1) > `inferred_low` (**no anchor at all** — the modal `first.last` applied blind) > `unknown` (probe refused) > `catch_all` (domain accepts everything — unverifiable) |
+| `email_confidence` | `high` / `medium` / `low` — set only for inferred rows |
 | `person_role_family` | `hr` / `tech_leadership` / `other` |
 | `evidence_json` | Source URL per field. `inferred:first.last` means the address was derived, not found |
 

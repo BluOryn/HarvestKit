@@ -20,6 +20,8 @@ import re
 from job_scraper.models import JobListing
 from job_scraper.normalize import canonicalize_url
 
+from ..net_guard import _resolves_to_public
+
 log = logging.getLogger(__name__)
 
 GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
@@ -32,8 +34,18 @@ _TAG_RX = re.compile(r"<[^>]+>")
 _WS_RX = re.compile(r"\s+")
 
 
+MAX_GUESSES = 4
+
+
 def guess_domains(slug: str, company: str = "") -> list[str]:
-    """Candidate own-domains for a board slug, best guess first."""
+    """Candidate own-domains for a board slug, best guess first.
+
+    Candidates are filtered by DNS before being returned. Most guesses are for
+    domains that simply do not exist, and letting those reach the HTTP resolver
+    costs a full connect timeout each — with a dozen TLDs per company that is
+    minutes of dead waiting per board. A failed getaddrinfo costs milliseconds,
+    and net_guard already caches the result.
+    """
     stems: list[str] = []
     for raw in (slug, company):
         cleaned = re.sub(r"[^a-z0-9\s-]", "", (raw or "").lower()).strip()
@@ -42,7 +54,16 @@ def guess_domains(slug: str, company: str = "") -> list[str]:
         for variant in (cleaned.replace(" ", "").replace("-", ""), cleaned.replace(" ", "-")):
             if variant and variant not in stems:
                 stems.append(variant)
-    return [f"https://{stem}.{tld}/" for stem in stems for tld in DOMAIN_TLDS]
+
+    live: list[str] = []
+    for stem in stems:
+        for tld in DOMAIN_TLDS:
+            host = f"{stem}.{tld}"
+            if _resolves_to_public(host):
+                live.append(f"https://{host}/")
+                if len(live) >= MAX_GUESSES:
+                    return live
+    return live
 
 
 def _text(html: str) -> str:

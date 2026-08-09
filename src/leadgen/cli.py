@@ -134,7 +134,9 @@ def main(argv: list[str] | None = None) -> int:
                     log.info("seed: %d public ATS boards", len(boards))
                     listings.extend(fetch_boards(boards, http))
                 log.info("seed: %d listings total", len(listings))
-                companies = companies_from_listings(listings, http, guess_domains=guess_domains)
+                companies = companies_from_listings(
+                    listings, http, guess_domains=guess_domains, concurrency=args.concurrency * 2
+                )
                 log.info("seed: %d unique companies with a resolved own-domain", len(companies))
                 funnel = process_companies(
                     companies,
