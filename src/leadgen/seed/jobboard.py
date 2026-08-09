@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from ..assemble import CompanyContext
 from ..company.domain import resolve_domain
 from ..email.validate import is_role_account
+from ..geo import country_from_location
 
 log = logging.getLogger(__name__)
 
@@ -114,11 +116,22 @@ def companies_from_listings(
                 if token.strip():
                     tech.add(token.strip().lower())
 
+        # Boards return a free-text location, not a country code. Without one the
+        # per-country ceiling cannot bite, so derive it from whatever they gave
+        # us — the modal country across a company's ads is a better guess than
+        # the first, since one remote US role should not relabel a Berlin firm.
+        country = _first(getattr(item, "country", "") for item in group)
+        if not country:
+            codes = Counter(
+                code for item in group if (code := country_from_location(getattr(item, "location", "") or ""))
+            )
+            country = codes.most_common(1)[0][0] if codes else ""
+
         return CompanyContext(
             name=first.company,
             domain=domain,
             website=f"https://{domain}",
-            country=_first(getattr(item, "country", "") for item in group),
+            country=country,
             region=_first(getattr(item, "region", "") for item in group),
             city=_first(getattr(item, "city", "") for item in group),
             size_hint=_first(getattr(item, "company_size", "") for item in group),

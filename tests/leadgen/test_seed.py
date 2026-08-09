@@ -142,3 +142,24 @@ def test_guess_domains_tries_slug_and_company_name_variants(monkeypatch):
     atsboards.guess_domains("trade-republic", "Trade Republic")
     assert "traderepublic.com" in seen
     assert "trade-republic.com" in seen
+
+
+def test_country_is_derived_from_the_listing_location():
+    listings = [
+        JobListing(
+            title="Backend Engineer", company="Acme", job_url="https://acme.de/1", location="Munich, Germany"
+        ),
+    ]
+    assert companies_from_listings(listings, StubHttp())[0].country == "DE"
+
+
+def test_the_modal_country_wins_over_the_first_one():
+    """One remote US role must not relabel a Berlin company."""
+    listings = [
+        JobListing(
+            title="SRE", company="Acme", job_url="https://acme.de/1", location="Remote - United States"
+        ),
+        JobListing(title="Backend Engineer", company="Acme", job_url="https://acme.de/2", location="Berlin"),
+        JobListing(title="Data Engineer", company="Acme", job_url="https://acme.de/3", location="Munich"),
+    ]
+    assert companies_from_listings(listings, StubHttp())[0].country == "DE"
