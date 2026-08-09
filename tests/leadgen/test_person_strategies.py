@@ -133,3 +133,42 @@ def test_candidate_paths_put_localised_first():
 def test_candidate_paths_have_no_duplicates():
     paths = candidate_paths("DE")
     assert len(paths) == len(set(paths))
+
+
+def test_team_parser_rejects_shouting_marketing_headings():
+    """Real bug from a live run: all-caps nav copy was extracted as people."""
+    html = """
+    <html><body><main>
+    <div><h3>RUN YOUR BUSINESS</h3><p>SumUp POS</p></div>
+    <div><h3>TAKE PAYMENTS</h3><p>Self-service Kiosk</p></div>
+    <div><h3>MANAGE FINANCES</h3><p>SumUp Wealth</p></div>
+    <div><h3>Anna Schmidt</h3><p>CTO</p></div>
+    </main></body></html>
+    """
+    names = {hit.name for hit in team.extract(html, "https://x.test/about")}
+    assert names == {"Anna Schmidt"}
+
+
+def test_team_parser_rejects_nav_and_marketing_phrases():
+    html = """
+    <html><body><main>
+    <div><h3>About Us</h3><p>Company</p></div>
+    <div><h3>Book A Demo</h3><p>Sales</p></div>
+    <div><h3>Our Mission</h3><p>Values</p></div>
+    <div><h3>Peter Wolf</h3><p>Head of HR</p></div>
+    </main></body></html>
+    """
+    names = {hit.name for hit in team.extract(html, "https://x.test/about")}
+    assert names == {"Peter Wolf"}
+
+
+def test_team_parser_still_accepts_real_names_with_particles_and_initials():
+    html = """
+    <html><body><main>
+    <div><h3>Jan van der Berg</h3><p>CTO</p></div>
+    <div><h3>J. P. Mueller</h3><p>Head of People</p></div>
+    <div><h3>Émilie Durand</h3><p>Directrice Technique</p></div>
+    </main></body></html>
+    """
+    names = {hit.name for hit in team.extract(html, "https://x.test/team")}
+    assert names == {"Jan van der Berg", "J. P. Mueller", "Émilie Durand"}

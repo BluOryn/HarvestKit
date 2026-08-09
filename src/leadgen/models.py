@@ -21,6 +21,7 @@ EMAIL_STATUS_ORDER: list[str] = [
     "verified",
     "inferred_high",
     "inferred_medium",
+    "inferred_low",
     "unknown",
     "catch_all",
 ]

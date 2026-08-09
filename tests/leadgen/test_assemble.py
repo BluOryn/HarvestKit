@@ -78,7 +78,43 @@ def test_catch_all_domain_is_flagged_not_trusted(monkeypatch):
 def test_a_role_account_is_never_attached_to_a_person():
     hits = [PersonHit(name="Anna Schmidt", role="CTO", email="info@acme.de", source_url="u")]
     lead = build_leads(COMPANY, hits)[0]
-    assert lead.person_email == "", "info@ must not become Anna's address"
+    assert lead.person_email != "info@acme.de", "info@ must not become Anna's address"
+    assert not lead.person_email.startswith("info@")
+
+
+def test_a_role_account_leaves_no_email_when_guessing_is_off():
+    hits = [PersonHit(name="Anna Schmidt", role="CTO", email="info@acme.de", source_url="u")]
+    lead = build_leads(COMPANY, hits, guess_without_anchor=False)[0]
+    assert lead.person_email == ""
+
+
+def test_an_anchorless_domain_falls_back_to_the_modal_format(monkeypatch):
+    """No published address anywhere: the guess is emitted, labelled as a guess."""
+    monkeypatch.setattr(email_validate, "is_catch_all", lambda domain: None)
+    hits = [PersonHit(name="Peter Wolf", role="CTO", source_url="https://acme.de/team")]
+    lead = build_leads(COMPANY, hits)[0]
+    assert lead.person_email == "peter.wolf@acme.de"
+    assert lead.email_status == "inferred_low"
+    assert lead.email_confidence == "low"
+    assert lead.evidence["person_email"].startswith("guessed:")
+
+
+def test_guessing_can_be_disabled():
+    hits = [PersonHit(name="Peter Wolf", role="CTO", source_url="u")]
+    lead = build_leads(COMPANY, hits, guess_without_anchor=False)[0]
+    assert lead.person_email == ""
+
+
+def test_a_real_anchor_still_beats_the_blind_guess(monkeypatch):
+    """An observed f.last domain must not be overridden by the modal format."""
+    monkeypatch.setattr(email_validate, "is_catch_all", lambda domain: None)
+    hits = [
+        PersonHit(name="Anna Schmidt", email="a.schmidt@acme.de", role="CTO", source_url="u1"),
+        PersonHit(name="Peter Wolf", role="Head of HR", source_url="u2"),
+    ]
+    leads = {lead.person_name: lead for lead in build_leads(COMPANY, hits)}
+    assert leads["Peter Wolf"].person_email == "p.wolf@acme.de"
+    assert leads["Peter Wolf"].email_status == "inferred_medium"
 
 
 def test_a_recruiter_anchor_from_the_seed_unlocks_the_domain():

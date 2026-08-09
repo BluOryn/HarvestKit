@@ -21,20 +21,29 @@ _ENTITY_RX = re.compile(
     re.I,
 )
 _EMAIL_RX = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-# A person's name: two to four capitalised tokens, allowing particles and
-# initials. Unicode-aware so "Jörg Müller" and "Émilie Durand" match.
-_NAME_RX = re.compile(
-    r"^(?:[A-ZÀ-ÖØ-Þ][\w'’-]*\.?\s+){1,3}[A-ZÀ-ÖØ-Þ][\w'’-]+$",
-    re.UNICODE,
+# A person's name: two to four Title-Case tokens, allowing particles and
+# initials. Each token must be an uppercase letter followed by lowercase ones —
+# "RUN YOUR BUSINESS" and "TAKE PAYMENTS" are marketing headings, and a regex
+# that merely wants "capitalised" accepts every one of them.
+_TOKEN = r"(?:[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ'’-]+|[A-ZÀ-ÖØ-Þ]\.|van|von|der|den|de|del|di|da|la|le|ter)"
+_NAME_RX = re.compile(rf"^{_TOKEN}(?:\s+{_TOKEN}){{1,3}}$", re.UNICODE)
+# Nav and marketing copy that survives the shape test.
+_STOPWORD_RX = re.compile(
+    r"\b(?:cookie|privacy|imprint|newsletter|sign in|log in|get started|learn more|read more"
+    r"|our story|our mission|our values|contact us|about us|follow us|join us|book a demo"
+    r"|free trial|case study|white ?paper|press release|all rights)\b",
+    re.I,
 )
 _ROLE_MAX_CHARS = 80
 
 
 def _looks_like_a_person(text: str) -> bool:
     value = (text or "").strip()
-    if not value or len(value) > 60 or _ENTITY_RX.search(value):
+    if not value or len(value) > 60 or _ENTITY_RX.search(value) or _STOPWORD_RX.search(value):
         return False
     if any(char.isdigit() for char in value):
+        return False
+    if value.isupper():
         return False
     if not _NAME_RX.match(value):
         return False

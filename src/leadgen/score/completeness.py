@@ -14,6 +14,9 @@ EMAIL_STATUS_WEIGHTS: dict[str, float] = {
     "verified": 36.0,
     "inferred_high": 26.0,
     "inferred_medium": 16.0,
+    # No anchor on the domain — the modal format applied blind. Ranks below
+    # every evidenced status so these fill the tail of a quota, never the head.
+    "inferred_low": 8.0,
     "unknown": 10.0,
     "catch_all": 4.0,
 }

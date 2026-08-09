@@ -15,6 +15,7 @@ from .checkpoint import Checkpoint
 from .export import write_csv
 from .pipeline import process_companies
 from .score.quota import select
+from .seed.atsboards import fetch_boards, guess_domains
 from .seed.jobboard import companies_from_listings
 
 log = logging.getLogger("leadgen")
@@ -42,6 +43,19 @@ def _build_http(config) -> HttpClient:
     )
 
 
+def _read_boards(path: str) -> list[tuple[str, str]]:
+    """Parse `<kind> <slug>  # comment` lines into (kind, slug) pairs."""
+    boards: list[tuple[str, str]] = []
+    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) >= 2:
+            boards.append((parts[0], parts[1]))
+    return boards
+
+
 def _collect_listings(config, http) -> list:
     listings: list = []
     for target in config.targets:
@@ -57,6 +71,11 @@ def _collect_listings(config, http) -> list:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="leadgen", description="Harvest a lead list.")
     parser.add_argument("--config", required=True, help="config name or path")
+    parser.add_argument(
+        "--boards",
+        default="",
+        help="file of '<kind> <slug>' public ATS boards to seed from, in addition to config targets",
+    )
     parser.add_argument("--target", type=int, default=1000, help="exact number of rows wanted")
     parser.add_argument("--output", default="output/leads.csv")
     parser.add_argument("--checkpoint", default=".cache/leadgen.sqlite")
@@ -70,12 +89,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--country-ceiling", type=float, default=0.25)
     parser.add_argument(
+        "--roles",
+        default="hr,tech_leadership",
+        help="role families to keep, comma separated; 'any' disables the filter",
+    )
+    parser.add_argument(
         "--overfetch",
         type=float,
         default=3.0,
         help="stop harvesting once target*overfetch email-bearing leads are banked",
     )
     parser.add_argument("--no-smtp", action="store_true", help="skip catch-all probing")
+    parser.add_argument(
+        "--no-guess",
+        action="store_true",
+        help="never apply the modal first.last format to a domain with no published address",
+    )
     parser.add_argument(
         "--select-only", action="store_true", help="skip harvesting, re-cut the existing checkpoint"
     )
@@ -100,8 +129,12 @@ def main(argv: list[str] | None = None) -> int:
             http = _build_http(config)
             try:
                 listings = _collect_listings(config, http)
-                log.info("seed: %d listings across %d targets", len(listings), len(config.targets))
-                companies = companies_from_listings(listings, http)
+                if args.boards:
+                    boards = _read_boards(args.boards)
+                    log.info("seed: %d public ATS boards", len(boards))
+                    listings.extend(fetch_boards(boards, http))
+                log.info("seed: %d listings total", len(listings))
+                companies = companies_from_listings(listings, http, guess_domains=guess_domains)
                 log.info("seed: %d unique companies with a resolved own-domain", len(companies))
                 funnel = process_companies(
                     companies,
@@ -111,14 +144,23 @@ def main(argv: list[str] | None = None) -> int:
                     smtp=not args.no_smtp,
                     max_pages=args.max_pages,
                     max_person_pages=args.max_person_pages,
+                    guess_without_anchor=not args.no_guess,
                     stop_after=int(args.target * args.overfetch) if args.overfetch else None,
                 )
                 log.info("funnel: %s", dict(funnel))
             finally:
                 http.close()
 
+        families = (
+            None
+            if args.roles.strip().lower() == "any"
+            else frozenset(part.strip() for part in args.roles.split(",") if part.strip())
+        )
         leads, report = select(
-            checkpoint.all_leads(), target=args.target, country_ceiling=args.country_ceiling
+            checkpoint.all_leads(),
+            target=args.target,
+            country_ceiling=args.country_ceiling,
+            role_families=families,
         )
         write_csv(leads, args.output)
     finally:

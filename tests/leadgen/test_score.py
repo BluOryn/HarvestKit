@@ -131,3 +131,25 @@ def test_report_breaks_down_status_and_role():
     _, report = select(leads, target=10)
     assert report.by_status["published"] == 1
     assert report.by_role_family["hr"] == 1
+
+
+def test_role_filter_keeps_only_the_families_the_brief_asked_for():
+    leads = [
+        _lead(person_name="A", person_email="a@a.de", company_domain="a.de", person_role_family="hr"),
+        _lead(person_name="B", person_email="b@b.de", company_domain="b.de", person_role_family="other"),
+        _lead(
+            person_name="C",
+            person_email="c@c.de",
+            company_domain="c.de",
+            person_role_family="tech_leadership",
+        ),
+    ]
+    selected, report = select(leads, target=10, role_families=frozenset({"hr", "tech_leadership"}))
+    assert {lead.person_name for lead in selected} == {"A", "C"}
+    assert report.dropped["wrong_role"] == 1
+
+
+def test_no_role_filter_keeps_everything():
+    leads = [_lead(person_role_family="other", person_email="b@b.de", company_domain="b.de")]
+    selected, _ = select(leads, target=10, role_families=None)
+    assert len(selected) == 1

@@ -62,14 +62,27 @@ def _country_of(lead: Lead) -> str:
 
 
 def select(
-    leads: list[Lead], *, target: int, country_ceiling: float = 0.25
+    leads: list[Lead],
+    *,
+    target: int,
+    country_ceiling: float = 0.25,
+    role_families: frozenset[str] | None = None,
 ) -> tuple[list[Lead], QuotaReport]:
+    """Cut to exactly `target`, or report how far short the supply fell.
+
+    `role_families` restricts the list to the roles the brief actually asked
+    for. Without it a run happily delivers a thousand marketing managers, which
+    satisfies the row count and nothing else.
+    """
     report = QuotaReport(requested=target, candidates=len(leads))
 
     qualified: list[Lead] = []
     seen_ids: set[str] = set()
     seen_people: set[str] = set()
     for lead in leads:
+        if role_families is not None and lead.person_role_family not in role_families:
+            report.dropped["wrong_role"] += 1
+            continue
         if not (lead.person_email or "").strip():
             report.dropped["no_email"] += 1
             continue

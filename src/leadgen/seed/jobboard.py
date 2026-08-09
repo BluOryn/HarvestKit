@@ -61,11 +61,17 @@ def _company_key(listing) -> str:
     return (getattr(listing, "company", "") or "").strip().lower()
 
 
-def companies_from_listings(listings: list, http) -> list[CompanyContext]:
+def companies_from_listings(listings: list, http, *, guess_domains=None) -> list[CompanyContext]:
     """Collapse listings to unique companies with resolved domains.
 
     One domain probe per company, not per listing — a company with forty open
     roles must not cost forty probes.
+
+    `guess_domains(company) -> list[str]` supplies fallback candidates for seeds
+    whose listings only ever carry an ATS URL. Greenhouse and Lever both do:
+    they return the board's jobs but never the employer's own site, so without a
+    guesser every company from those boards would be dropped for having no
+    resolvable domain.
     """
     grouped: dict[str, list] = {}
     for listing in listings:
@@ -82,6 +88,9 @@ def companies_from_listings(listings: list, http) -> list[CompanyContext]:
                 url = getattr(listing, attribute, "") or ""
                 if url:
                     hints.append(url)
+
+        if guess_domains is not None:
+            hints.extend(guess_domains(first.company))
 
         domain = resolve_domain(first.company, hints, http)
         if not domain:

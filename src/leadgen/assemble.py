@@ -17,6 +17,12 @@ from .models import Lead
 from .person.hit import PersonHit
 from .person.roles import classify_role, split_name
 
+# When a domain publishes no address at all there is nothing to infer from, but
+# "first.last@" is the dominant corporate format by a wide margin. Applying it
+# blind is a guess, not evidence, so it is emitted as inferred_low and scored
+# below every evidenced status — it fills the tail of a quota, never the head.
+FALLBACK_PATTERN = "first.last"
+
 
 @dataclass
 class CompanyContext:
@@ -43,14 +49,20 @@ def _resolve_email(
     pattern: str,
     pattern_confidence: str,
     smtp: bool,
+    guess_without_anchor: bool,
 ) -> tuple[str, str, str]:
     """Return (email, status, evidence_url). Empty email means none was usable."""
     published = bool(hit.email) and not is_role_account(hit.email)
+    guessed = False
     if published:
         candidate, evidence_url = hit.email.strip().lower(), hit.source_url
     elif pattern and company.domain:
         candidate = apply_pattern(pattern, first, last, company.domain)
         evidence_url = f"inferred:{pattern}"
+    elif guess_without_anchor and company.domain:
+        guessed = True
+        candidate = apply_pattern(FALLBACK_PATTERN, first, last, company.domain)
+        evidence_url = f"guessed:{FALLBACK_PATTERN}"
     else:
         return "", "", ""
 
@@ -71,11 +83,19 @@ def _resolve_email(
         return candidate, "verified", evidence_url
     if verdict.status == "catch_all":
         return candidate, "catch_all", evidence_url
+    if guessed:
+        return candidate, "inferred_low", evidence_url
     status = "inferred_high" if pattern_confidence == "high" else "inferred_medium"
     return candidate, status, evidence_url
 
 
-def build_leads(company: CompanyContext, hits: list[PersonHit], *, smtp: bool = True) -> list[Lead]:
+def build_leads(
+    company: CompanyContext,
+    hits: list[PersonHit],
+    *,
+    smtp: bool = True,
+    guess_without_anchor: bool = True,
+) -> list[Lead]:
     anchors: list[tuple[str, str]] = list(company.extra_anchors)
     for hit in hits:
         if hit.name and hit.email and not is_role_account(hit.email):
@@ -115,11 +135,14 @@ def build_leads(company: CompanyContext, hits: list[PersonHit], *, smtp: bool = 
             lead.set_evidence("person_role", hit.source_url)
 
         email, status, evidence_url = _resolve_email(
-            hit, company, first, last, pattern, pattern_confidence, smtp
+            hit, company, first, last, pattern, pattern_confidence, smtp, guess_without_anchor
         )
         lead.person_email = email
         lead.email_status = status
-        lead.email_confidence = pattern_confidence if status.startswith("inferred") else ""
+        if status == "inferred_low":
+            lead.email_confidence = "low"
+        elif status.startswith("inferred"):
+            lead.email_confidence = pattern_confidence
         if email:
             lead.source_email_url = evidence_url
             lead.set_evidence("person_email", evidence_url)

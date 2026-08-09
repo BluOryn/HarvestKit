@@ -28,6 +28,7 @@ def process_companies(
     smtp: bool = True,
     max_pages: int = 8,
     max_person_pages: int = 10,
+    guess_without_anchor: bool = True,
     stop_after: int | None = None,
 ) -> Counter:
     """Resolve people for each company and persist the resulting leads.
@@ -56,7 +57,7 @@ def process_companies(
             with counter_lock:
                 funnel["no_person_found"] += 1
             return
-        leads = build_leads(company, hits, smtp=smtp)
+        leads = build_leads(company, hits, smtp=smtp, guess_without_anchor=guess_without_anchor)
         with_email = sum(1 for lead in leads if lead.person_email)
         targeted = sum(1 for lead in leads if lead.person_role_family in ("hr", "tech_leadership"))
         checkpoint.save_leads(leads)
