@@ -27,6 +27,7 @@ def process_companies(
     concurrency: int = 8,
     smtp: bool = True,
     max_pages: int = 8,
+    max_person_pages: int = 10,
     stop_after: int | None = None,
 ) -> Counter:
     """Resolve people for each company and persist the resulting leads.
@@ -43,7 +44,13 @@ def process_companies(
             with counter_lock:
                 funnel["already_done"] += 1
             return
-        hits = resolve_people(company.domain, company.country, http, max_pages=max_pages)
+        hits = resolve_people(
+            company.domain,
+            company.country,
+            http,
+            max_pages=max_pages,
+            max_person_pages=max_person_pages,
+        )
         checkpoint.record_company(company.domain)
         if not hits:
             with counter_lock:

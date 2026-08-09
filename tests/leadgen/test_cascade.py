@@ -36,10 +36,28 @@ def test_cascade_visits_localised_paths_and_collects_people():
     assert {h.name for h in hits} == {"Anna Schmidt", "Peter Wolf"}
 
 
-def test_cascade_stops_at_max_pages():
+def test_max_pages_bounds_the_guessed_paths():
     http = StubHttp({})
-    resolve_people("acme.de", "DE", http, max_pages=3)
+    resolve_people("acme.de", "DE", http, max_pages=3, use_sitemap=False)
     assert len(http.calls) == 3
+    assert all("sitemap" not in call for call in http.calls)
+
+
+def test_sitemap_mining_adds_probes_on_top_of_the_guessed_paths():
+    """max_pages caps the *guessed* paths; sitemap URLs are known to exist,
+    so they are budgeted separately rather than competing for the same slots."""
+    http = StubHttp({})
+    resolve_people("acme.de", "DE", http, max_pages=3, use_sitemap=True)
+    guessed = [call for call in http.calls if "sitemap" not in call]
+    probes = [call for call in http.calls if "sitemap" in call]
+    assert len(guessed) == 3
+    assert probes, "the sitemap index should have been probed"
+
+
+def test_sitemap_mining_can_be_switched_off_entirely():
+    http = StubHttp({})
+    resolve_people("acme.de", "DE", http, max_person_pages=0)
+    assert all("sitemap" not in call for call in http.calls)
 
 
 def test_cascade_needs_a_domain():

@@ -61,7 +61,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--output", default="output/leads.csv")
     parser.add_argument("--checkpoint", default=".cache/leadgen.sqlite")
     parser.add_argument("--concurrency", type=int, default=8)
-    parser.add_argument("--max-pages", type=int, default=8, help="pages fetched per company")
+    parser.add_argument("--max-pages", type=int, default=8, help="guessed paths fetched per company")
+    parser.add_argument(
+        "--max-person-pages",
+        type=int,
+        default=10,
+        help="per-person pages mined from each company's sitemap (0 disables)",
+    )
     parser.add_argument("--country-ceiling", type=float, default=0.25)
     parser.add_argument(
         "--overfetch",
@@ -104,6 +110,7 @@ def main(argv: list[str] | None = None) -> int:
                     concurrency=args.concurrency,
                     smtp=not args.no_smtp,
                     max_pages=args.max_pages,
+                    max_person_pages=args.max_person_pages,
                     stop_after=int(args.target * args.overfetch) if args.overfetch else None,
                 )
                 log.info("funnel: %s", dict(funnel))

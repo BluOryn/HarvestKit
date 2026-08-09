@@ -14,7 +14,51 @@ from ..normalize import canonicalize_url
 from .base import BaseAdapter
 
 CLIENT_ID = "jobboerse-jobsuche"
-BASE = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs"
+
+# The service has moved between path versions more than once, and a stale path
+# answers 403 "No match found for request" rather than 404 — which reads as an
+# auth problem and sends you looking in the wrong place. Probe the known paths
+# once per process and remember the one that answers.
+BASE_CANDIDATES: list[str] = [
+    "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/app/jobs",
+    "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs",
+    "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v5/app/jobs",
+    "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v5/jobs",
+]
+BASE = BASE_CANDIDATES[0]
+
+_HEADERS = {"X-API-Key": CLIENT_ID, "Accept": "application/json"}
+
+# Resolved once per process: None = not yet probed, "" = every candidate failed.
+_resolved_base: str | None = None
+
+
+def resolve_base(http: HttpClient) -> str:
+    """Return the first candidate path that answers with a JSON object."""
+    global _resolved_base
+    if _resolved_base is not None:
+        return _resolved_base
+    probe = urlencode({"was": "Softwareentwickler", "page": 1, "size": 1})
+    for candidate in BASE_CANDIDATES:
+        payload = http.get_json(f"{candidate}?{probe}", headers=_HEADERS)
+        if isinstance(payload, dict) and "stellenangebote" in payload:
+            logging.info("arbeitsagentur: using %s", candidate)
+            _resolved_base = candidate
+            return candidate
+    logging.warning(
+        "arbeitsagentur: none of the %d known API paths answered — the service has "
+        "probably moved again. Tried: %s",
+        len(BASE_CANDIDATES),
+        ", ".join(BASE_CANDIDATES),
+    )
+    _resolved_base = ""
+    return ""
+
+
+def _reset_base_cache() -> None:
+    """Test seam — the resolved path is process-global."""
+    global _resolved_base
+    _resolved_base = None
 
 
 class ArbeitsagenturAdapter(BaseAdapter):
@@ -35,12 +79,16 @@ class ArbeitsagenturAdapter(BaseAdapter):
         if run_config.max_pages:
             max_pages = min(max_pages, run_config.max_pages)
 
+        base = resolve_base(http)
+        if not base:
+            return []
+
         listings: list[JobListing] = []
         seen_ids = set()
         for page in range(1, max_pages + 1):
             qs = urlencode({"was": was, "wo": wo, "page": page, "size": size, "umkreis": umkreis})
-            url = f"{BASE}?{qs}"
-            payload = http.get_json(url, headers={"X-API-Key": CLIENT_ID, "Accept": "application/json"})
+            url = f"{base}?{qs}"
+            payload = http.get_json(url, headers=_HEADERS)
             if not isinstance(payload, dict):
                 break
             angebote = payload.get("stellenangebote") or []
