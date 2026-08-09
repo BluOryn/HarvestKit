@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 
+from ..net_guard import guard
 from .hit import PersonHit
 from .paths import candidate_paths
 from .roles import classify_role
@@ -52,6 +53,8 @@ def merge_hits(hits: list[PersonHit]) -> list[PersonHit]:
 
 def _harvest(url: str, http, hits: list[PersonHit]) -> None:
     """Fetch one page and run every strategy over it. Never raises."""
+    if not guard(url):
+        return
     try:
         response = http.get(url)
     except Exception as exc:

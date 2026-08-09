@@ -10,6 +10,8 @@ from __future__ import annotations
 import logging
 from urllib.parse import urlparse
 
+from ..net_guard import guard
+
 log = logging.getLogger(__name__)
 
 ATS_HOSTS: frozenset[str] = frozenset(
@@ -117,8 +119,13 @@ def resolve_domain(company_name: str, hints: list[str], http) -> str:
             continue
         tried.add(host)
         for scheme in ("https", "http"):
+            probe = f"{scheme}://{host}/"
+            # A listing's apply_url is attacker-influenced; it must not be able
+            # to point the crawler at the metadata service or an internal host.
+            if not guard(probe):
+                break
             try:
-                if http.get(f"{scheme}://{host}/") is not None:
+                if http.get(probe) is not None:
                     return host
             except Exception as exc:
                 log.debug("domain: %s://%s failed: %s", scheme, host, exc)

@@ -17,6 +17,8 @@ from urllib.parse import urlparse
 
 from job_scraper import safe_xml
 
+from ...net_guard import guard, is_safe_url
+
 log = logging.getLogger(__name__)
 
 SITEMAP_PATHS = ("/sitemap.xml", "/sitemap_index.xml", "/sitemap-index.xml")
@@ -103,6 +105,10 @@ def person_urls(domain: str, http, *, limit: int = MAX_PERSON_URLS) -> list[str]
         if url in seen_docs:
             continue
         seen_docs.add(url)
+        # Nested <loc> entries are remote input: a sitemap can point its index
+        # at anything, including an internal address.
+        if not guard(url):
+            continue
         try:
             response = http.get(url)
         except Exception as exc:
@@ -116,7 +122,7 @@ def person_urls(domain: str, http, *, limit: int = MAX_PERSON_URLS) -> list[str]
         pages, nested = _urls_in(body)
         queue.extend(nested)
         for page in pages:
-            if _looks_like_a_person_url(page) and page not in found:
+            if _looks_like_a_person_url(page) and page not in found and is_safe_url(page):
                 found.append(page)
                 if len(found) >= limit:
                     break
