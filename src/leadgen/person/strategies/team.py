@@ -27,19 +27,33 @@ _EMAIL_RX = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 # that merely wants "capitalised" accepts every one of them.
 _TOKEN = r"(?:[A-ZÀ-ÖØ-Þ][a-zà-öø-ÿ'’-]+|[A-ZÀ-ÖØ-Þ]\.|van|von|der|den|de|del|di|da|la|le|ter)"
 _NAME_RX = re.compile(rf"^{_TOKEN}(?:\s+{_TOKEN}){{1,3}}$", re.UNICODE)
-# Nav and marketing copy that survives the shape test.
-_STOPWORD_RX = re.compile(
-    r"\b(?:cookie|privacy|imprint|newsletter|sign in|log in|get started|learn more|read more"
-    r"|our story|our mission|our values|contact us|about us|follow us|join us|book a demo"
-    r"|free trial|case study|white ?paper|press release|all rights)\b",
-    re.I,
-)
+# Nav, marketing and section headings that survive the shape test. "About
+# Celonis", "Our Leadership" and "Global Advisory Council" are all Title Case
+# two-to-three-word phrases, so no amount of capitalisation logic separates them
+# from a person's name — only vocabulary does.
+_STOPWORDS = (
+    "cookie privacy imprint impressum newsletter blog blogs press news awards award "
+    "leadership leaders leader council committee board advisory governance investors "
+    "team teams squad crew people careers career jobs job hiring culture values mission "
+    "story stories about overview company companies group global regional worldwide "
+    "partners partner customers customer clients solutions products product platform "
+    "resources resource support help docs documentation pricing plans demo trial "
+    "contact office offices location locations headquarters login signin signup "
+    "download webinar event events conference summit podcast report reports "
+    "policy terms legal compliance security trust "
+    "all more recent latest featured popular new full name title role position"
+).split()
+_STOPWORD_RX = re.compile(r"\b(?:" + "|".join(_STOPWORDS) + r")\b", re.I)
+# Possessive forms and stray punctuation that only appear in copy, never a name.
+_COPY_RX = re.compile(r"['’]s\b|[:!?&/|]|\.\.\.|…")
 _ROLE_MAX_CHARS = 80
 
 
 def _looks_like_a_person(text: str) -> bool:
     value = (text or "").strip()
-    if not value or len(value) > 60 or _ENTITY_RX.search(value) or _STOPWORD_RX.search(value):
+    if not value or len(value) > 60:
+        return False
+    if _ENTITY_RX.search(value) or _STOPWORD_RX.search(value) or _COPY_RX.search(value):
         return False
     if any(char.isdigit() for char in value):
         return False

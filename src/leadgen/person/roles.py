@@ -32,8 +32,11 @@ TECH_LEADERSHIP_PATTERNS: list[str] = [
     r"chief technology officer",
     r"chief technical officer",
     r"chief information officer",
-    r"v\.?p\.? (?:of )?engineering",
-    r"vice president (?:of )?engineering",
+    # "VP, Engineering" is as common as "VP of Engineering" on real team pages,
+    # and requiring the "of" silently drops half of them.
+    r"v\.?p\.?[,\s]+(?:of\s+)?(?:engineering|technology|platform|infrastructure|data)",
+    r"vice president[,\s]+(?:of\s+)?(?:engineering|technology|platform)",
+    r"s?vp\s+eng\b",
     r"head of (?:engineering|technology|technical|development|it|platform|software|product engineering)",
     r"engineering (?:manager|director|lead|head)",
     r"director of (?:engineering|technology|it)",
@@ -48,12 +51,39 @@ TECH_LEADERSHIP_PATTERNS: list[str] = [
 ]
 
 
+# Company-level decision makers. On EU sites these are the highest-yield names
+# available: §5 TMG requires a German Impressum to name the Geschäftsführer, so
+# the single most reliable person on any German company site is an executive,
+# not an HR manager. Excluding them throws away the best of what the highest-
+# yield source produces.
+EXECUTIVE_PATTERNS: list[str] = [
+    r"c\.?e\.?o\.?",
+    r"c\.?o\.?o\.?",
+    r"c\.?f\.?o\.?",
+    r"chief (?:executive|operating|financial|product|revenue|commercial) officer",
+    r"co[-\s]?founder",
+    r"founder",
+    r"gr[üu]nder(?:in)?",
+    r"gesch[äa]ftsf[üu]hrer(?:in)?",
+    r"managing director",
+    r"general manager",
+    r"president",
+    r"owner|inhaber(?:in)?",
+    r"vorstand(?:svorsitzender?|smitglied)?",
+    r"board (?:member|director)",
+    r"directeur g[ée]n[ée]ral|direttore generale|director general",
+    r"amministratore (?:unico|delegato)",
+    r"g[ée]rant(?:e)?",
+]
+
+
 def _compile(patterns: list[str]) -> re.Pattern[str]:
     return re.compile(r"\b(?:" + "|".join(patterns) + r")\b", re.I)
 
 
 HR_RX = _compile(HR_PATTERNS)
 TECH_RX = _compile(TECH_LEADERSHIP_PATTERNS)
+EXEC_RX = _compile(EXECUTIVE_PATTERNS)
 
 # Honorifics and post-nominals that are not part of a person's name.
 _TITLE_RX = re.compile(r"^(?:dr|prof|dipl|ing|mag|mr|mrs|ms|herr|frau|m|mme|sr|sra)\.?\s+", re.I)
@@ -61,21 +91,41 @@ _TITLE_RX = re.compile(r"^(?:dr|prof|dipl|ing|mag|mr|mrs|ms|herr|frau|m|mme|sr|s
 _PARTICLES = {"van", "von", "der", "den", "de", "del", "della", "di", "da", "dos", "la", "le", "ter"}
 
 
+TARGET_FAMILIES = ("hr", "tech_leadership", "executive")
+
+
 def classify_role(title: str) -> str:
-    """Return "hr", "tech_leadership" or "other"."""
+    """Return "hr", "tech_leadership", "executive" or "other".
+
+    Order is significance, not string length. HR first, because "Leiter
+    Personalwesen" carries a leadership word but is unambiguously HR. Technical
+    leadership next, so a "Co-Founder & CTO" is filed under the function the
+    buyer actually wants to reach rather than under the equity.
+    """
     if not title:
         return "other"
-    # HR is checked first: "Leiter Personalwesen" contains a leadership word but
-    # is unambiguously an HR role.
     if HR_RX.search(title):
         return "hr"
     if TECH_RX.search(title):
         return "tech_leadership"
+    if EXEC_RX.search(title):
+        return "executive"
     return "other"
 
 
 def is_target_role(title: str) -> bool:
-    return classify_role(title) in ("hr", "tech_leadership")
+    return classify_role(title) in TARGET_FAMILIES
+
+
+# How much a title is worth when the same person is found twice under different
+# ones. A German managing director who is also the CTO appears as
+# "Geschäftsführer" on the Impressum and "Chief Technology Officer" on the team
+# page; the buyer asked to reach the CTO, so that is the title to keep.
+FAMILY_RANK: dict[str, int] = {"hr": 3, "tech_leadership": 3, "executive": 2, "other": 0}
+
+
+def role_rank(title: str) -> int:
+    return FAMILY_RANK.get(classify_role(title), 0)
 
 
 def split_name(full: str) -> tuple[str, str]:

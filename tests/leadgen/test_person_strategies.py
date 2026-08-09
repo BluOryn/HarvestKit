@@ -172,3 +172,19 @@ def test_team_parser_still_accepts_real_names_with_particles_and_initials():
     """
     names = {hit.name for hit in team.extract(html, "https://x.test/team")}
     assert names == {"Jan van der Berg", "J. P. Mueller", "Émilie Durand"}
+
+
+def test_team_parser_rejects_section_headings_that_are_title_case():
+    """Live-run bug: 'About Celonis' and 'Our Leadership' are Title Case, so no
+    capitalisation rule separates them from a name — only vocabulary does."""
+    html = """
+    <html><body><main>
+    <div><h3>About Celonis</h3><p>Company</p></div>
+    <div><h3>Our Leadership</h3><p>Team</p></div>
+    <div><h3>Global Advisory Council</h3><p>Advisors</p></div>
+    <div><h3>Recent Compliance Blogs</h3><p>Blog</p></div>
+    <div><h3>Brian Armstrong</h3><p>Co-Founder &amp; Chief Executive Officer</p></div>
+    </main></body></html>
+    """
+    names = {hit.name for hit in team.extract(html, "https://x.test/about")}
+    assert names == {"Brian Armstrong"}

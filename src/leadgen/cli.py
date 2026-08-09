@@ -90,7 +90,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--country-ceiling", type=float, default=0.25)
     parser.add_argument(
         "--roles",
-        default="hr,tech_leadership",
+        default="hr,tech_leadership,executive",
         help="role families to keep, comma separated; 'any' disables the filter",
     )
     parser.add_argument(

@@ -15,6 +15,7 @@ from threading import Lock
 from .assemble import CompanyContext, build_leads
 from .checkpoint import Checkpoint
 from .person.cascade import resolve_people
+from .person.roles import TARGET_FAMILIES
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +60,7 @@ def process_companies(
             return
         leads = build_leads(company, hits, smtp=smtp, guess_without_anchor=guess_without_anchor)
         with_email = sum(1 for lead in leads if lead.person_email)
-        targeted = sum(1 for lead in leads if lead.person_role_family in ("hr", "tech_leadership"))
+        targeted = sum(1 for lead in leads if lead.person_role_family in TARGET_FAMILIES)
         checkpoint.save_leads(leads)
         with counter_lock:
             funnel["companies_with_people"] += 1

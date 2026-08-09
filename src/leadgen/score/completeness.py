@@ -24,6 +24,9 @@ EMAIL_STATUS_WEIGHTS: dict[str, float] = {
 ROLE_FAMILY_WEIGHTS: dict[str, float] = {
     "hr": 20.0,
     "tech_leadership": 20.0,
+    # A decision maker, but not the function the brief named, so it ranks just
+    # below the two asked for and well above everyone else.
+    "executive": 15.0,
     "other": 2.0,
 }
 

@@ -13,7 +13,7 @@ import re
 from ..net_guard import guard
 from .hit import PersonHit
 from .paths import candidate_paths
-from .roles import classify_role
+from .roles import role_rank
 from .strategies import impressum, jsonld_person, press, sitemap, team
 
 log = logging.getLogger(__name__)
@@ -42,11 +42,11 @@ def merge_hits(hits: list[PersonHit]) -> list[PersonHit]:
         for attribute in ("email", "phone", "linkedin", "source_url"):
             if not getattr(existing, attribute) and getattr(hit, attribute):
                 setattr(existing, attribute, getattr(hit, attribute))
-        # A title the buyer asked for beats one they did not. "CTO" is more
-        # useful on the row than "Geschäftsführer" even though both are true.
-        incoming_is_target = classify_role(hit.role) != "other"
-        existing_is_target = classify_role(existing.role) != "other"
-        if hit.role and (not existing.role or (incoming_is_target and not existing_is_target)):
+        # A title the buyer asked for beats one they did not, and among titles
+        # they did ask for, the function beats the office: "CTO" is more useful
+        # on the row than "Geschäftsführer" even though both are true of the
+        # same person. A binary target/not-target test cannot express that.
+        if hit.role and (not existing.role or role_rank(hit.role) > role_rank(existing.role)):
             existing.role = hit.role
     return list(merged.values())
 
