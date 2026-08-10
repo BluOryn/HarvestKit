@@ -54,6 +54,14 @@ def process_companies(
             max_person_pages=max_person_pages,
         )
         checkpoint.record_company(company.domain)
+        # People named in the company's own ads cost no extra request and are
+        # the only reliable source of HR contacts, so they stand alongside the
+        # crawl rather than behind it — a company whose site names nobody is
+        # still a lead if its ad does.
+        if company.ad_contacts:
+            with counter_lock:
+                funnel["ad_contacts"] += len(company.ad_contacts)
+            hits = hits + company.ad_contacts
         if not hits:
             with counter_lock:
                 funnel["no_person_found"] += 1

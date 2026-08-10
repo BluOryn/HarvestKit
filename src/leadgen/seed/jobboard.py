@@ -17,6 +17,7 @@ from ..assemble import CompanyContext
 from ..company.domain import resolve_domain
 from ..email.validate import is_role_account
 from ..geo import country_from_location
+from ..person.jobad import contacts_from_ad
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +51,11 @@ IT_TITLE_PATTERNS: list[str] = [
     r"platform engineer|integration engineer|network engineer|netzwerk\w*",
 ]
 IT_TITLE_RX = re.compile(r"(?:" + "|".join(IT_TITLE_PATTERNS) + r")", re.I)
+
+
+# One company advertising sixty roles usually names the same recruiter in all
+# sixty. Enough to find the distinct people, not enough to crawl the repetition.
+MAX_AD_CONTACTS = 5
 
 
 def looks_like_it_role(title: str) -> bool:
@@ -157,8 +163,31 @@ def companies_from_listings(
             log.debug("seed: no own-domain for %r, dropping", first.company)
             return None
 
+        # The ads are already in hand, so mining them for a named contact costs
+        # no request. Capped because a company with sixty ads repeating the same
+        # recruiter should contribute a person, not sixty.
+        ad_contacts: list = []
+        seen_contacts: set[str] = set()
+        for listing in group:
+            for hit in contacts_from_ad(
+                getattr(listing, "description", "") or "",
+                domain,
+                getattr(listing, "job_url", "") or "",
+            ):
+                if hit.name.lower() in seen_contacts:
+                    continue
+                seen_contacts.add(hit.name.lower())
+                ad_contacts.append(hit)
+            if len(ad_contacts) >= MAX_AD_CONTACTS:
+                break
+
         anchors: list[tuple[str, str]] = []
         tech: set[str] = set()
+        # An address printed next to a name in an ad tells us the company's
+        # address format outright, which is the strongest anchor available.
+        for hit in ad_contacts:
+            if hit.email and not is_role_account(hit.email):
+                anchors.append((hit.name, hit.email))
         for listing in group:
             for name_attr, email_attr in (
                 ("recruiter_name", "recruiter_email"),
@@ -184,6 +213,7 @@ def companies_from_listings(
             tech_stack=", ".join(sorted(tech)),
             seed_url=first.job_url or getattr(first, "apply_url", ""),
             extra_anchors=anchors,
+            ad_contacts=ad_contacts,
         )
 
     # Domain resolution is the slowest step in the whole run: several candidate

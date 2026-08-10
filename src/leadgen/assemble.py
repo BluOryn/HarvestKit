@@ -39,6 +39,9 @@ class CompanyContext:
     # (name, email) pairs seen outside the site crawl — typically the recruiter
     # named in a job ad. These are the highest-value anchors we get.
     extra_anchors: list[tuple[str, str]] = field(default_factory=list)
+    # People named in the company's own job ads. Kept apart from the site crawl
+    # because they are found before it and survive it finding nothing.
+    ad_contacts: list[PersonHit] = field(default_factory=list)
 
 
 def _resolve_email(
