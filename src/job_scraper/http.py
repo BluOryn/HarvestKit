@@ -348,7 +348,17 @@ class HttpClient:
             backoff_factor=1.0,
             status_forcelist=(429, 500, 502, 503, 504),
             allowed_methods=frozenset(["GET", "HEAD", "POST"]),
-            respect_retry_after_header=True,
+            # urllib3 honours Retry-After by sleeping inside the adapter, and it
+            # does not cap that sleep. A rate-limited host answering
+            # "Retry-After: 3600" therefore parks the calling thread for an hour
+            # while it still holds its per-host slot, and every other worker
+            # queues behind it: the run stops dead with no CPU, no log line and
+            # no error. Observed against a search API after a burst.
+            #
+            # The 429 handler below does the same job with a 30s ceiling, so the
+            # header is still respected — just never unboundedly.
+            respect_retry_after_header=False,
+            backoff_max=_MAX_RETRY_AFTER_SECONDS,
         )
         adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=40)
         self._session.mount("http://", adapter)
@@ -472,6 +482,10 @@ class HttpClient:
         proxy_url = (proxy_entry or {}).get("url", "")
         throttle_key = f"{host}|{proxy_url}"
         self._throttle.acquire(throttle_key)
+        # Backing off is this caller's penalty, not a reason to keep holding a
+        # slot every other worker is queued on. Recorded here, slept after the
+        # release below.
+        backoff_seconds = 0.0
         try:
             ua = self._pick_ua()
             merged = self._stealth_headers(url, ua)
@@ -494,10 +508,9 @@ class HttpClient:
                 self._proxies.report_failure(proxy_entry)
                 return None
             if response.status_code == 429:
-                wait_s = _retry_after_seconds(response.headers.get("Retry-After"))
-                logging.info("429 from %s — backing off %.1fs", url, wait_s)
+                backoff_seconds = _retry_after_seconds(response.headers.get("Retry-After"))
+                logging.info("429 from %s — backing off %.1fs", url, backoff_seconds)
                 self._proxies.report_failure(proxy_entry)
-                time.sleep(min(wait_s, 30.0))
                 return None
             if response.status_code == 403:
                 # WAF / proxy block
@@ -523,6 +536,8 @@ class HttpClient:
             return final_url, text
         finally:
             self._throttle.release(throttle_key)
+            if backoff_seconds > 0:
+                time.sleep(backoff_seconds)
 
     def head(self, url: str) -> int | None:
         if self.obey_robots and not self._robots.is_allowed(url, self.user_agent):
