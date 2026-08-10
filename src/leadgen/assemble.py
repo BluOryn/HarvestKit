@@ -8,14 +8,18 @@ rather than being dropped.
 
 from __future__ import annotations
 
+import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .email.pattern import apply_pattern, infer_pattern
 from .email.validate import is_role_account, validate
 from .models import Lead
 from .person.hit import PersonHit
+from .person.name import looks_like_person_name, split_people, strip_leading_title
 from .person.roles import classify_role, split_name
+
+log = logging.getLogger(__name__)
 
 # When a domain publishes no address at all there is nothing to infer from, but
 # "first.last@" is the dominant corporate format by a wide margin. Applying it
@@ -92,6 +96,27 @@ def _resolve_email(
     return candidate, status, evidence_url
 
 
+def _clean_hits(hits: list[PersonHit]) -> list[PersonHit]:
+    """Drop what is not a person, and split lines that name several.
+
+    Every strategy reads human-authored HTML, where a name and a menu item are
+    both short runs of Title Case words. Left alone, "Account Manager" becomes
+    account.manager@company.com: a fabricated address that bounces and costs
+    sender reputation. Doing this once here means no strategy can forget it.
+    """
+    cleaned: list[PersonHit] = []
+    for hit in hits:
+        for part in split_people(hit.name):
+            # A title glued to the front of a real name ("Product Owner Line
+            # Benzin") is recoverable; a bare title is not.
+            candidate = part if looks_like_person_name(part) else strip_leading_title(part)
+            if not looks_like_person_name(candidate):
+                log.debug("assemble: %r is not a person name, dropping", part)
+                continue
+            cleaned.append(replace(hit, name=candidate))
+    return cleaned
+
+
 def build_leads(
     company: CompanyContext,
     hits: list[PersonHit],
@@ -108,9 +133,7 @@ def build_leads(
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     leads: list[Lead] = []
-    for hit in hits:
-        if not hit.name:
-            continue
+    for hit in _clean_hits(hits):
         first, last = split_name(hit.name)
         lead = Lead(
             person_name=hit.name,

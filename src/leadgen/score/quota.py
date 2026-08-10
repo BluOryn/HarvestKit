@@ -20,6 +20,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from ..models import Lead
+from ..person.name import looks_like_person_name
 from .completeness import score_lead
 
 _WS_RX = re.compile(r"\s+")
@@ -94,6 +95,12 @@ def select(
             continue
         if not (lead.person_name or "").strip():
             report.dropped["no_name"] += 1
+            continue
+        # Last gate before delivery. Extraction rejects these too, but a
+        # checkpoint outlives the code that filled it, and a fabricated contact
+        # costs more trust than a missing one.
+        if not looks_like_person_name(lead.person_name):
+            report.dropped["not_a_person"] += 1
             continue
         fingerprint, person = lead.fingerprint(), _person_key(lead)
         if fingerprint in seen_ids or person in seen_people:

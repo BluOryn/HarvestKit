@@ -23,9 +23,11 @@ def _lead(**kwargs) -> Lead:
 
 
 def _many(count: int, country: str = "DE", prefix: str = "x") -> list[Lead]:
+    # Names must be plausible: selection rejects anything that does not look
+    # like a person, so single-token placeholders would silently empty the list.
     return [
         _lead(
-            person_name=f"P{prefix}{i}",
+            person_name=f"Anna Muster{prefix}{i}",
             person_email=f"p{prefix}{i}@{prefix}{i}.de",
             company_domain=f"{prefix}{i}.de",
             company_country=country,
@@ -110,12 +112,14 @@ def test_ceiling_relaxes_rather_than_under_delivering():
 
 
 def test_the_best_lead_in_each_country_is_taken_first():
-    weak = _lead(person_name="Weak", person_email="w@w.de", company_domain="w.de", email_status="catch_all")
+    weak = _lead(
+        person_name="Weak Candidate", person_email="w@w.de", company_domain="w.de", email_status="catch_all"
+    )
     strong = _lead(
-        person_name="Strong", person_email="s@s.de", company_domain="s.de", email_status="published"
+        person_name="Strong Candidate", person_email="s@s.de", company_domain="s.de", email_status="published"
     )
     selected, _ = select([weak, strong], target=1)
-    assert selected[0].person_name == "Strong"
+    assert selected[0].person_name == "Strong Candidate"
 
 
 def test_report_breaks_down_status_and_role():
@@ -135,17 +139,19 @@ def test_report_breaks_down_status_and_role():
 
 def test_role_filter_keeps_only_the_families_the_brief_asked_for():
     leads = [
-        _lead(person_name="A", person_email="a@a.de", company_domain="a.de", person_role_family="hr"),
-        _lead(person_name="B", person_email="b@b.de", company_domain="b.de", person_role_family="other"),
+        _lead(person_name="Ann Alpha", person_email="a@a.de", company_domain="a.de", person_role_family="hr"),
         _lead(
-            person_name="C",
+            person_name="Bo Beta", person_email="b@b.de", company_domain="b.de", person_role_family="other"
+        ),
+        _lead(
+            person_name="Cara Gamma",
             person_email="c@c.de",
             company_domain="c.de",
             person_role_family="tech_leadership",
         ),
     ]
     selected, report = select(leads, target=10, role_families=frozenset({"hr", "tech_leadership"}))
-    assert {lead.person_name for lead in selected} == {"A", "C"}
+    assert {lead.person_name for lead in selected} == {"Ann Alpha", "Cara Gamma"}
     assert report.dropped["wrong_role"] == 1
 
 
@@ -157,12 +163,12 @@ def test_no_role_filter_keeps_everything():
 
 def test_country_filter_keeps_only_the_requested_geography():
     leads = [
-        _lead(person_name="D", person_email="d@d.de", company_domain="d.de", company_country="DE"),
-        _lead(person_name="U", person_email="u@u.com", company_domain="u.com", company_country="US"),
-        _lead(person_name="F", person_email="f@f.fr", company_domain="f.fr", company_country="FR"),
+        _lead(person_name="Dana Aleff", person_email="d@d.de", company_domain="d.de", company_country="DE"),
+        _lead(person_name="Uma Novak", person_email="u@u.com", company_domain="u.com", company_country="US"),
+        _lead(person_name="Fabien Roux", person_email="f@f.fr", company_domain="f.fr", company_country="FR"),
     ]
     selected, report = select(leads, target=10, countries=frozenset({"DE", "FR"}))
-    assert {lead.person_name for lead in selected} == {"D", "F"}
+    assert {lead.person_name for lead in selected} == {"Dana Aleff", "Fabien Roux"}
     assert report.dropped["wrong_country"] == 1
 
 
