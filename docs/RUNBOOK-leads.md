@@ -51,8 +51,15 @@ python tools/verify_leads.py output/smoke.csv
 
 ```bash
 python run_leads.py --config configs/leads/eu-it.yaml \
-    --target 1000 --concurrency 8 -v 2>&1 | tee output/run.log
+    --boards configs/leads/boards.txt \
+    --search-keywords configs/leads/keywords.txt \
+    --search-keywords-multilingual configs/leads/keywords-multilingual.txt \
+    --countries eu --target 1000 --concurrency 16 2>&1 | tee output/run.log
 ```
+
+`--countries` is not optional once `--search-keywords` is in play: the search
+seed pairs each keyword with each country, so without one there is nowhere to
+search and the seed returns nothing. The run warns rather than failing silently.
 
 Interrupted runs resume — the checkpoint records every company already
 processed, so re-running the same command picks up where it stopped rather than
@@ -62,8 +69,11 @@ Useful flags:
 
 | Flag | Why |
 |---|---|
-| `--boards FILE` | Seed from public Greenhouse/Lever boards listed in `configs/leads/boards.txt` |
-| `--roles hr,tech_leadership` | Role families to keep. Default. `--roles any` keeps everyone |
+| `--boards FILE` | Seed from public Greenhouse/Lever/Personio boards listed in `configs/leads/boards.txt` |
+| `--search-keywords FILE` | **The geography-first seed.** Pairs each term with each `--countries` entry against Workable's cross-company search |
+| `--search-keywords-multilingual FILE` | SmartRecruiters, which has no geography parameter — the language of the term stands in for one |
+| `--search-max-pages N` | Pages per (country, keyword) pair. 15 is ample; most pairs exhaust well before it |
+| `--roles hr,tech_leadership` | Role families to keep. Default adds `executive`. `--roles any` keeps everyone |
 | `--no-smtp` | Skip catch-all probing. Faster; rows land `inferred_*` instead of `verified` |
 | `--no-guess` | Never apply the modal `first.last` format to a domain with no published address. Raises precision, cuts volume hard |
 | `--overfetch 4` | Bank 4× the target before cutting. Higher = better final quality, longer run |
@@ -100,7 +110,7 @@ so European names import correctly without any encoding dance.
 |---|---|
 | `email_status` | `published` (printed on their site) > `verified` (SMTP confirmed) > `inferred_high` (pattern from 2+ known addresses) > `inferred_medium` (pattern from 1) > `inferred_low` (**no anchor at all** — the modal `first.last` applied blind) > `unknown` (probe refused) > `catch_all` (domain accepts everything — unverifiable) |
 | `email_confidence` | `high` / `medium` / `low` — set only for inferred rows |
-| `person_role_family` | `hr` / `tech_leadership` / `other` |
+| `person_role_family` | `hr` / `tech_leadership` / `executive` / `other` |
 | `evidence_json` | Source URL per field. `inferred:first.last` means the address was derived, not found |
 
 If the buyer wants only addresses that were actually observed, filter to
@@ -135,11 +145,19 @@ test before changing the parser.
 **`company_error` climbing.** Check the log for the underlying exception. TLS
 failures on older German hosts are common and mostly harmless at low rates.
 
-**The list is almost entirely German.** Expected with the current config — the
-only working search-style seed covers Germany, and DACH also has the highest
-person coverage because §5 TMG makes an Impressum legally mandatory. Broader EU
-spread needs additional seed targets; the `SeedProvider` boundary is there so
-they drop in without touching the rest of the pipeline.
+**The list is heavily German.** Partly real — §5 TMG makes an Impressum legally
+mandatory, so DACH genuinely has the highest person coverage in Europe. But
+check the seed before accepting it: `--boards` alone is US-dominated (measured:
+983 IT companies, 113 in the EU), because the public datasets those slugs come
+from are US-centric. `--search-keywords` is the fix, since it asks each country
+directly instead of filtering afterwards.
+
+**Few HR contacts, mostly executives.** Company pages structurally favour
+executives — an Impressum must name the Geschäftsführer, a team page shows
+whoever the company wants seen. HR contacts come from `--search-keywords`
+ads via the job-ad miner, so a run seeded only from `--boards` will be
+executive-heavy: Greenhouse and Lever do not expose the recruiter block that
+European ads print.
 
 ## What this does not do
 
