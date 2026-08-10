@@ -25,3 +25,42 @@ technical lead
 support engineer
 python
 java
+
+# Workable matches ad text, not just the title, so native-language terms pull
+# employers an English query misses entirely — a Mittelstand firm advertising
+# "Fachinformatiker Systemintegration" is invisible to "software engineer".
+Entwickler
+Softwareentwickler
+Fachinformatiker
+Systemadministrator
+IT-Administrator
+Informatiker
+développeur
+ingénieur informatique
+sviluppatore
+desarrollador
+ontwikkelaar
+programista
+
+# Broader role families. The brief is "any sector which employs IT", so a
+# company hiring one BI analyst or one SAP consultant qualifies.
+engineer
+IT support
+helpdesk
+infrastructure
+systems
+SAP
+ERP
+business intelligence
+analyst
+mobile developer
+android
+ios
+test engineer
+cyber security
+azure
+aws
+linux
+react
+node
+.NET
