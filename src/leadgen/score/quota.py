@@ -67,6 +67,7 @@ def select(
     target: int,
     country_ceiling: float = 0.25,
     role_families: frozenset[str] | None = None,
+    countries: frozenset[str] | None = None,
 ) -> tuple[list[Lead], QuotaReport]:
     """Cut to exactly `target`, or report how far short the supply fell.
 
@@ -80,6 +81,11 @@ def select(
     seen_ids: set[str] = set()
     seen_people: set[str] = set()
     for lead in leads:
+        if countries is not None and _country_of(lead) not in countries:
+            # An unresolved country counts as out of scope. A geography filter
+            # that keeps "??" is not a geography filter.
+            report.dropped["wrong_country"] += 1
+            continue
         if role_families is not None and lead.person_role_family not in role_families:
             report.dropped["wrong_role"] += 1
             continue

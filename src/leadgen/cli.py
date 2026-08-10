@@ -13,6 +13,7 @@ from job_scraper.http import HttpClient
 
 from .checkpoint import Checkpoint
 from .export import write_csv
+from .geo import EFTA_AND_UK, EU_COUNTRIES
 from .pipeline import process_companies
 from .score.quota import select
 from .seed.atsboards import fetch_boards, guess_domains
@@ -89,6 +90,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--country-ceiling", type=float, default=0.25)
     parser.add_argument(
+        "--countries",
+        default="",
+        help="restrict to these ISO codes, comma separated; 'eu' means the EU-27, "
+        "'europe' adds the UK, Switzerland, Norway and Iceland",
+    )
+    parser.add_argument(
         "--roles",
         default="hr,tech_leadership,executive",
         help="role families to keep, comma separated; 'any' disables the filter",
@@ -158,11 +165,21 @@ def main(argv: list[str] | None = None) -> int:
             if args.roles.strip().lower() == "any"
             else frozenset(part.strip() for part in args.roles.split(",") if part.strip())
         )
+        wanted = args.countries.strip().lower()
+        if not wanted:
+            country_set = None
+        elif wanted == "eu":
+            country_set = EU_COUNTRIES
+        elif wanted == "europe":
+            country_set = EU_COUNTRIES | EFTA_AND_UK
+        else:
+            country_set = frozenset(part.strip().upper() for part in wanted.split(",") if part.strip())
         leads, report = select(
             checkpoint.all_leads(),
             target=args.target,
             country_ceiling=args.country_ceiling,
             role_families=families,
+            countries=country_set,
         )
         write_csv(leads, args.output)
     finally:

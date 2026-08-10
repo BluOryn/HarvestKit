@@ -153,3 +153,22 @@ def test_no_role_filter_keeps_everything():
     leads = [_lead(person_role_family="other", person_email="b@b.de", company_domain="b.de")]
     selected, _ = select(leads, target=10, role_families=None)
     assert len(selected) == 1
+
+
+def test_country_filter_keeps_only_the_requested_geography():
+    leads = [
+        _lead(person_name="D", person_email="d@d.de", company_domain="d.de", company_country="DE"),
+        _lead(person_name="U", person_email="u@u.com", company_domain="u.com", company_country="US"),
+        _lead(person_name="F", person_email="f@f.fr", company_domain="f.fr", company_country="FR"),
+    ]
+    selected, report = select(leads, target=10, countries=frozenset({"DE", "FR"}))
+    assert {lead.person_name for lead in selected} == {"D", "F"}
+    assert report.dropped["wrong_country"] == 1
+
+
+def test_an_unresolved_country_is_out_of_scope_under_a_filter():
+    """A geography filter that keeps '??' is not a geography filter."""
+    leads = [_lead(person_email="x@x.de", company_domain="x.de", company_country="")]
+    selected, report = select(leads, target=10, countries=frozenset({"DE"}))
+    assert selected == []
+    assert report.dropped["wrong_country"] == 1
