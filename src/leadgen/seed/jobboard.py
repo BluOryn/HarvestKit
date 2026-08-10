@@ -107,10 +107,19 @@ def companies_from_listings(
 
     def country_of(group: list) -> str:
         """Modal country across a company's ads — one remote US role should not
-        relabel a Berlin company."""
-        explicit = _first(getattr(item, "country", "") for item in group)
-        if explicit:
-            return explicit
+        relabel a Berlin company.
+
+        A code the source stated outranks one inferred from location text, but
+        it is still only a vote. A cross-company search sweeps every country in
+        turn, so the same employer arrives once per country it advertises in,
+        and taking whichever landed first would label it by search order rather
+        than by where it actually is.
+        """
+        stated = Counter(
+            code for item in group if (code := (getattr(item, "country", "") or "").strip().upper())
+        )
+        if stated:
+            return stated.most_common(1)[0][0]
         codes = Counter(
             code for item in group if (code := country_from_location(getattr(item, "location", "") or ""))
         )

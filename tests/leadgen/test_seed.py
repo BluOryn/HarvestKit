@@ -86,6 +86,45 @@ def test_company_country_and_city_carry_through():
     assert company.city == "Munich"
 
 
+def test_the_stated_country_is_the_modal_one_not_the_first_seen():
+    """A cross-company search sweeps countries in turn, so the same employer
+    arrives once per country it advertises in. Search order must not decide."""
+    listings = [
+        JobListing(title="Backend Engineer", company="Acme GmbH", job_url="https://acme.de/1", country="IE"),
+        JobListing(title="Data Engineer", company="Acme GmbH", job_url="https://acme.de/2", country="DE"),
+        JobListing(title="Cloud Architect", company="Acme GmbH", job_url="https://acme.de/3", country="DE"),
+    ]
+    assert companies_from_listings(listings, StubHttp())[0].country == "DE"
+
+
+def test_a_stated_country_outranks_one_inferred_from_location_text():
+    listings = [
+        JobListing(
+            title="Backend Engineer",
+            company="Acme GmbH",
+            job_url="https://acme.de/1",
+            location="Remote - Paris, France",
+            country="DE",
+        ),
+    ]
+    assert companies_from_listings(listings, StubHttp())[0].country == "DE"
+
+
+def test_the_country_falls_back_to_location_text_when_none_is_stated():
+    listings = [
+        JobListing(
+            title="Backend Engineer", company="Acme GmbH", job_url="https://acme.de/1", location="Munich"
+        ),
+        JobListing(
+            title="Data Engineer", company="Acme GmbH", job_url="https://acme.de/2", location="Munich"
+        ),
+        JobListing(
+            title="DevOps Engineer", company="Acme GmbH", job_url="https://acme.de/3", location="Austin"
+        ),
+    ]
+    assert companies_from_listings(listings, StubHttp())[0].country == "DE"
+
+
 def test_a_company_whose_domain_cannot_be_resolved_is_dropped():
     listing = JobListing(title="Backend Engineer", company="Ghost", job_url="https://ghost.xyz/jobs/1")
     assert companies_from_listings([listing], StubHttp(reachable=())) == []
