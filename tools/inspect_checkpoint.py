@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from leadgen.checkpoint import Checkpoint  # noqa: E402
 from leadgen.geo import EU_COUNTRIES  # noqa: E402
+from leadgen.person.name import looks_like_person_name  # noqa: E402
 from leadgen.person.roles import TARGET_FAMILIES  # noqa: E402
 
 
@@ -37,10 +38,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.eu:
         leads = [lead for lead in leads if (lead.company_country or "").upper() in EU_COUNTRIES]
 
+    # Mirrors the gates the cut applies, so this number is the number that can
+    # actually be delivered rather than an optimistic total.
     deliverable = [
         lead
         for lead in leads
-        if lead.person_email and lead.person_name and lead.person_role_family in TARGET_FAMILIES
+        if lead.person_email
+        and lead.person_role_family in TARGET_FAMILIES
+        and looks_like_person_name(lead.person_name)
     ]
 
     print(f"leads banked:      {len(leads)}")

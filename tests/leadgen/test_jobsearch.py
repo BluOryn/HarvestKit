@@ -89,6 +89,26 @@ def test_workable_skips_a_job_with_no_company_name():
     assert search_workable(http, countries=["Germany"], keywords=["dev"]) == []
 
 
+def test_a_rate_limited_host_is_reported_not_mistaken_for_an_empty_result(caplog):
+    """Every query returning nothing reads exactly like a vocabulary that
+    matches nothing. The run must say which it is."""
+
+    class Blocked:
+        def get(self, url):
+            return None
+
+    with caplog.at_level("WARNING"):
+        search_workable(Blocked(), countries=["Germany", "France"], keywords=["dev", "data"])
+    assert "rate-limiting" in caplog.text
+
+
+def test_a_normal_run_does_not_cry_rate_limit(caplog):
+    http = FakeHttp({"jobs.workable.com": {"jobs": [_workable_job()], "nextPageToken": None}})
+    with caplog.at_level("WARNING"):
+        search_workable(http, countries=["Germany"], keywords=["dev"])
+    assert "rate-limiting" not in caplog.text
+
+
 def test_workable_survives_a_non_json_response():
     class Broken:
         def get(self, url):

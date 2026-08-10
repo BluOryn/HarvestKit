@@ -96,8 +96,10 @@ def _workable_listing(job: dict) -> JobListing | None:
 def search_workable(http, *, countries: list[str], keywords: list[str], max_pages: int = MAX_PAGES) -> list:
     """Every (country, keyword) pairing, paginated to exhaustion or `max_pages`."""
     listings: list[JobListing] = []
+    pairs = empty = 0
     for country in countries:
         for keyword in keywords:
+            pairs += 1
             token, pages = "", 0
             while pages < max_pages:
                 params = {"query": keyword, "location": country}
@@ -114,7 +116,19 @@ def search_workable(http, *, countries: list[str], keywords: list[str], max_page
                 token = payload.get("nextPageToken") or ""
                 if not token:
                     break
+            empty += pages == 0
             log.info("jobsearch: workable %-14s %-18s %2d pages", country, keyword, pages)
+
+    # A rate-limited host returns nothing for every query, which reads exactly
+    # like a vocabulary that matches nothing. Saying so turns a silent no-op
+    # into something actionable.
+    if pairs and empty > pairs // 2:
+        log.warning(
+            "jobsearch: workable returned nothing for %d of %d queries — "
+            "the host is probably rate-limiting this IP, not out of results",
+            empty,
+            pairs,
+        )
     return listings
 
 

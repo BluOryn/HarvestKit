@@ -27,6 +27,21 @@ def test_urllib3_is_not_allowed_to_honour_retry_after_unboundedly():
         client.close()
 
 
+def test_429_is_handled_here_not_swallowed_by_urllib3():
+    """With 429 in urllib3's forcelist it retries, then raises MaxRetryError,
+    which arrives as a generic RequestException — so the branch that logs the
+    rate limit never runs and a blocked host looks like one with no results.
+
+    Observed live: 122 of 166 search queries returned "0 pages" and not one
+    line said why.
+    """
+    client = _client()
+    try:
+        assert 429 not in (_retry_config(client).status_forcelist or ())
+    finally:
+        client.close()
+
+
 def test_urllib3_backoff_is_bounded():
     client = _client()
     try:

@@ -346,7 +346,13 @@ class HttpClient:
         retry = Retry(
             total=max_retries,
             backoff_factor=1.0,
-            status_forcelist=(429, 500, 502, 503, 504),
+            # 429 is deliberately absent. urllib3 would retry it and then raise
+            # MaxRetryError, which arrives here as a generic RequestException --
+            # so a rate-limited host became indistinguishable from one with no
+            # results, and the 429 branch below never ran. A block that looks
+            # like an empty result set is the kind of thing you act on wrongly
+            # for an hour. Let it through and handle it where it can be logged.
+            status_forcelist=(500, 502, 503, 504),
             allowed_methods=frozenset(["GET", "HEAD", "POST"]),
             # urllib3 honours Retry-After by sleeping inside the adapter, and it
             # does not cap that sleep. A rate-limited host answering
