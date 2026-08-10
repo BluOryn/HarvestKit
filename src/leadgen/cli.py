@@ -16,6 +16,7 @@ from .export import write_csv
 from .geo import EFTA_AND_UK, EU_COUNTRIES, search_names
 from .pipeline import process_companies
 from .score.quota import select
+from .seed.arbeitnow import fetch as fetch_arbeitnow
 from .seed.atsboards import fetch_boards, guess_domains
 from .seed.jobboard import companies_from_listings
 from .seed.jobsearch import search_all
@@ -115,6 +116,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=15,
         help="pages per (country, keyword) pairing before moving on",
     )
+    parser.add_argument(
+        "--arbeitnow-pages",
+        type=int,
+        default=0,
+        help="pages to walk of the Arbeitnow German job feed (0 disables). Paced at "
+        "5s a page because the API refuses anything faster",
+    )
     parser.add_argument("--target", type=int, default=1000, help="exact number of rows wanted")
     parser.add_argument("--output", default="output/leads.csv")
     parser.add_argument("--checkpoint", default=".cache/leadgen.sqlite")
@@ -179,6 +187,8 @@ def main(argv: list[str] | None = None) -> int:
                     boards = _read_boards(args.boards)
                     log.info("seed: %d public ATS boards", len(boards))
                     listings.extend(fetch_boards(boards, http))
+                if args.arbeitnow_pages:
+                    listings.extend(fetch_arbeitnow(http, max_pages=args.arbeitnow_pages))
                 if args.search_keywords or args.search_keywords_multilingual:
                     keywords = _read_lines(args.search_keywords) if args.search_keywords else []
                     multilingual = (
