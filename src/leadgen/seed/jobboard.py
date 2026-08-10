@@ -64,6 +64,27 @@ def _company_key(listing) -> str:
     return (getattr(listing, "company", "") or "").strip().lower()
 
 
+# The board slug is usually a better basis for guessing a company's own domain
+# than its legal name: Personio reports "ottonova Holding AG", whose domain is
+# ottonova.de, not ottonovaholdingag.de.
+_SLUG_FROM_URL = (
+    re.compile(r"https?://([a-z0-9][a-z0-9-]{1,40})\.jobs\.personio\.de", re.I),
+    re.compile(r"https?://(?:boards|job-boards)\.greenhouse\.io/([a-z0-9][a-z0-9_-]{1,40})", re.I),
+    re.compile(r"https?://jobs\.lever\.co/([a-z0-9][a-z0-9-]{1,40})", re.I),
+    re.compile(r"https?://jobs\.ashbyhq\.com/([a-z0-9][a-z0-9.-]{1,40})", re.I),
+)
+
+
+def _ats_slug(listing) -> str:
+    for attribute in ("job_url", "apply_url"):
+        url = getattr(listing, attribute, "") or ""
+        for pattern in _SLUG_FROM_URL:
+            match = pattern.match(url)
+            if match:
+                return match.group(1)
+    return ""
+
+
 def companies_from_listings(
     listings: list,
     http,
@@ -120,7 +141,7 @@ def companies_from_listings(
                     hints.append(url)
 
         if guess_domains is not None:
-            hints.extend(guess_domains(first.company))
+            hints.extend(guess_domains(_ats_slug(first) or first.company, first.company))
 
         domain = resolve_domain(first.company, hints, http)
         if not domain:

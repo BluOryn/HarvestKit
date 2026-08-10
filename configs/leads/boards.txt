@@ -1135,3 +1135,34 @@ lever quantcast
 lever stradaeducation
 lever synthego
 lever trio
+
+# Personio boards — DACH SMEs. Highest-value EU seed: §5 TMG guarantees
+# their Impressum names a real person.
+personio westwing
+personio outdooractive
+personio vivid
+personio wingcopter
+personio neos
+personio capmo
+personio hometogo
+personio building-radar
+personio ottonova
+personio verivox
+personio schuettflix
+personio shipcloud
+personio getsafe
+personio clark
+personio kiwigrid
+personio researchgate
+personio retorio
+personio sevdesk
+personio temedica
+personio vertice
+personio brighter-ai
+personio celus
+personio homeday
+personio next-kraftwerke
+personio penta
+personio smava
+personio cosuno
+personio zortify

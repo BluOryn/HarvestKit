@@ -193,3 +193,74 @@ def test_companies_outside_the_requested_geography_are_never_crawled():
     companies = companies_from_listings(listings, Recorder(), countries=frozenset({"DE"}))
     assert [c.name for c in companies] == ["Berlin Co"]
     assert not any("texasco" in url for url in probed), "US company must not be probed at all"
+
+
+PERSONIO_JSON = """[
+ {"id":2547139,"name":"Senior Software Engineer (m/w/d)","employment_type":"Festanstellung",
+  "seniority":"Berufserfahren","keywords":"Python,Kubernetes","office":"München",
+  "offices":["München"],"department":"Engineering","subcompany":"ottonova Holding AG - 9680"},
+ {"id":2626047,"name":"Werkstudent Rechtsabteilung","employment_type":"Praktikum",
+  "seniority":"Studierende","keywords":"","office":"München","offices":["München"],
+  "department":"Legal","subcompany":"ottonova Holding AG - 9680"}
+]"""
+
+
+class PersonioHttp:
+    def get(self, url, **kwargs):
+        return (url, PERSONIO_JSON) if "personio.de" in url else None
+
+
+def test_personio_board_parses_into_listings():
+    from leadgen.seed.atsboards import fetch_boards
+
+    listings = fetch_boards([("personio", "ottonova")], PersonioHttp())
+    assert len(listings) == 2
+    engineer = listings[0]
+    assert engineer.title.startswith("Senior Software Engineer")
+    assert engineer.city == "München"
+    assert engineer.department == "Engineering"
+
+
+def test_personio_prefers_the_legal_entity_over_the_slug():
+    """subcompany carries the real company name; the trailing Personio account
+    number is not part of it."""
+    from leadgen.seed.atsboards import fetch_boards
+
+    assert fetch_boards([("personio", "ottonova")], PersonioHttp())[0].company == "ottonova Holding AG"
+
+
+def test_personio_listings_resolve_to_a_german_country_code():
+    from leadgen.seed.atsboards import fetch_boards
+
+    listings = fetch_boards([("personio", "ottonova")], PersonioHttp())
+    companies = companies_from_listings(
+        listings,
+        StubHttp(reachable=("ottonova.de",)),
+        guess_domains=lambda slug, name="": [f"https://{slug}.de/"],
+    )
+    assert companies and companies[0].country == "DE"
+
+
+def test_the_board_slug_beats_the_legal_name_when_guessing_a_domain():
+    """Personio reports 'ottonova Holding AG', whose site is ottonova.de — not
+    ottonovaholdingag.de. The slug in the ATS URL is the better basis."""
+    from leadgen.seed.atsboards import fetch_boards
+
+    seen = []
+
+    def guesser(slug, name=""):
+        seen.append(slug)
+        return [f"https://{slug}.de/"]
+
+    companies_from_listings(
+        fetch_boards([("personio", "ottonova")], PersonioHttp()),
+        StubHttp(reachable=("ottonova.de",)),
+        guess_domains=guesser,
+    )
+    assert seen == ["ottonova"], f"guessed from {seen}, not the slug"
+
+
+def test_an_unknown_board_kind_is_reported_not_crashed():
+    from leadgen.seed.atsboards import fetch_boards
+
+    assert fetch_boards([("nosuchats", "acme")], PersonioHttp()) == []

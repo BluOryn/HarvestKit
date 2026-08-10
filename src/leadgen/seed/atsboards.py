@@ -26,6 +26,10 @@ log = logging.getLogger(__name__)
 
 GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
 LEVER_URL = "https://api.lever.co/v0/postings/{slug}?mode=json"
+# Personio's customer base is overwhelmingly DACH SMEs, which makes it the
+# highest-value seed for a European list — and DACH is also where §5 TMG
+# guarantees the Impressum names a real person.
+PERSONIO_URL = "https://{slug}.jobs.personio.de/search.json"
 
 # Ordered by how often they turn out to be right for EU tech companies.
 DOMAIN_TLDS = ("com", "de", "io", "co", "fr", "nl", "fi", "se", "eu", "ai", "es", "it", "pl")
@@ -130,7 +134,46 @@ def _lever(slug: str, http) -> list[JobListing]:
     return listings
 
 
-FETCHERS = {"greenhouse": _greenhouse, "lever": _lever}
+def _personio(slug: str, http) -> list[JobListing]:
+    response = http.get(PERSONIO_URL.format(slug=slug))
+    if not response:
+        return []
+    try:
+        payload = json.loads(response[1])
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(payload, list):
+        return []
+    listings: list[JobListing] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        offices = item.get("offices") or []
+        location = item.get("office") or (offices[0] if offices else "")
+        # `subcompany` carries the legal entity ("ottonova Holding AG - 9680").
+        # It is a far better company name than the board slug, once the trailing
+        # Personio account number is stripped.
+        subcompany = re.sub(r"\s*-\s*\d+\s*$", "", str(item.get("subcompany") or "")).strip()
+        listings.append(
+            JobListing(
+                title=item.get("name") or "",
+                company=subcompany or slug,
+                location=location,
+                city=location,
+                department=item.get("department") or "",
+                seniority=item.get("seniority") or "",
+                employment_type=item.get("employment_type") or "",
+                description=_text(item.get("description") or "")[:20000],
+                skills=item.get("keywords") or "",
+                job_url=f"https://{slug}.jobs.personio.de/job/{item.get('id')}",
+                apply_url=f"https://{slug}.jobs.personio.de/job/{item.get('id')}",
+                source_ats="personio",
+            )
+        )
+    return listings
+
+
+FETCHERS = {"greenhouse": _greenhouse, "lever": _lever, "personio": _personio}
 
 
 def fetch_boards(boards: list[tuple[str, str]], http) -> list[JobListing]:
