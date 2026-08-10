@@ -117,6 +117,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="pages per (country, keyword) pairing before moving on",
     )
     parser.add_argument(
+        "--search-delay",
+        type=float,
+        default=0.0,
+        help="extra seconds between search requests. This host blocked a whole run "
+        "after ~1500 requests, and a seed that gets itself blocked is worth less "
+        "than a slower one that does not",
+    )
+    parser.add_argument(
         "--arbeitnow-pages",
         type=int,
         default=0,
@@ -216,6 +224,7 @@ def main(argv: list[str] | None = None) -> int:
                             smartrecruiters_keywords=multilingual,
                             max_pages=args.search_max_pages,
                             concurrency=args.concurrency,
+                            delay_seconds=args.search_delay,
                         )
                     )
                 log.info("seed: %d listings total", len(listings))

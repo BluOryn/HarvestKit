@@ -89,6 +89,33 @@ def test_workable_skips_a_job_with_no_company_name():
     assert search_workable(http, countries=["Germany"], keywords=["dev"]) == []
 
 
+def test_requests_can_be_paced_between_pages_but_not_before_the_first():
+    """This host blocked the run after ~1500 requests. A seed that gets itself
+    blocked is worth less than a slower one that does not."""
+    pages = [
+        {"jobs": [_workable_job()], "nextPageToken": "t1"},
+        {"jobs": [_workable_job()], "nextPageToken": None},
+    ]
+
+    class Paging(FakeHttp):
+        def get(self, url):
+            self.calls.append(url)
+            return (200, json.dumps(pages[min(len(self.calls) - 1, len(pages) - 1)]))
+
+    waits: list[float] = []
+    search_workable(
+        Paging({}), countries=["Germany"], keywords=["dev"], delay_seconds=1.5, sleep=waits.append
+    )
+    assert waits == [1.5]
+
+
+def test_no_pacing_by_default():
+    waits: list[float] = []
+    http = FakeHttp({"jobs.workable.com": {"jobs": [_workable_job()], "nextPageToken": None}})
+    search_workable(http, countries=["Germany"], keywords=["dev"], sleep=waits.append)
+    assert waits == []
+
+
 def test_a_rate_limited_host_is_reported_not_mistaken_for_an_empty_result(caplog):
     """Every query returning nothing reads exactly like a vocabulary that
     matches nothing. The run must say which it is."""

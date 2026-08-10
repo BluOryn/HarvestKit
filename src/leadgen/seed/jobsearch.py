@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote, urlencode
 
@@ -93,8 +94,22 @@ def _workable_listing(job: dict) -> JobListing | None:
     )
 
 
-def search_workable(http, *, countries: list[str], keywords: list[str], max_pages: int = MAX_PAGES) -> list:
-    """Every (country, keyword) pairing, paginated to exhaustion or `max_pages`."""
+def search_workable(
+    http,
+    *,
+    countries: list[str],
+    keywords: list[str],
+    max_pages: int = MAX_PAGES,
+    delay_seconds: float = 0.0,
+    sleep=time.sleep,
+) -> list:
+    """Every (country, keyword) pairing, paginated to exhaustion or `max_pages`.
+
+    `delay_seconds` paces requests beyond whatever the HTTP client's per-host
+    throttle already does. Worth setting: this host answered ~1,500 requests and
+    then refused everything from this IP for the best part of an hour, and a
+    seed that gets itself blocked is worth less than a slower one that does not.
+    """
     listings: list[JobListing] = []
     pairs = empty = 0
     for country in countries:
@@ -116,6 +131,8 @@ def search_workable(http, *, countries: list[str], keywords: list[str], max_page
                 token = payload.get("nextPageToken") or ""
                 if not token:
                     break
+                if delay_seconds:
+                    sleep(delay_seconds)
             empty += pages == 0
             log.info("jobsearch: workable %-14s %-18s %2d pages", country, keyword, pages)
 
@@ -191,12 +208,19 @@ def search_all(
     smartrecruiters_keywords: list[str] | None = None,
     max_pages: int = MAX_PAGES,
     concurrency: int = 8,
+    delay_seconds: float = 0.0,
 ) -> list:
     """Run both providers. A provider that fails must not take the run with it."""
 
     def workable_slice(country: str) -> list:
         try:
-            return search_workable(http, countries=[country], keywords=keywords, max_pages=max_pages)
+            return search_workable(
+                http,
+                countries=[country],
+                keywords=keywords,
+                max_pages=max_pages,
+                delay_seconds=delay_seconds,
+            )
         except Exception as exc:
             log.warning("jobsearch: workable %s failed: %s", country, exc)
             return []
