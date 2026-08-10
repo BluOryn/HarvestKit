@@ -69,6 +69,18 @@ def _collect_listings(config, http) -> list:
     return listings
 
 
+def _country_set(spec: str) -> frozenset[str] | None:
+    """'' -> everywhere, 'eu' -> the EU-27, 'europe' -> EU plus UK/CH/NO/IS."""
+    wanted = (spec or "").strip().lower()
+    if not wanted:
+        return None
+    if wanted == "eu":
+        return EU_COUNTRIES
+    if wanted == "europe":
+        return EU_COUNTRIES | EFTA_AND_UK
+    return frozenset(part.strip().upper() for part in wanted.split(",") if part.strip())
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="leadgen", description="Harvest a lead list.")
     parser.add_argument("--config", required=True, help="config name or path")
@@ -142,7 +154,11 @@ def main(argv: list[str] | None = None) -> int:
                     listings.extend(fetch_boards(boards, http))
                 log.info("seed: %d listings total", len(listings))
                 companies = companies_from_listings(
-                    listings, http, guess_domains=guess_domains, concurrency=args.concurrency * 2
+                    listings,
+                    http,
+                    guess_domains=guess_domains,
+                    concurrency=args.concurrency * 2,
+                    countries=_country_set(args.countries),
                 )
                 log.info("seed: %d unique companies with a resolved own-domain", len(companies))
                 funnel = process_companies(
@@ -165,15 +181,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.roles.strip().lower() == "any"
             else frozenset(part.strip() for part in args.roles.split(",") if part.strip())
         )
-        wanted = args.countries.strip().lower()
-        if not wanted:
-            country_set = None
-        elif wanted == "eu":
-            country_set = EU_COUNTRIES
-        elif wanted == "europe":
-            country_set = EU_COUNTRIES | EFTA_AND_UK
-        else:
-            country_set = frozenset(part.strip().upper() for part in wanted.split(",") if part.strip())
+        country_set = _country_set(args.countries)
         leads, report = select(
             checkpoint.all_leads(),
             target=args.target,

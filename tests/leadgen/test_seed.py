@@ -163,3 +163,33 @@ def test_the_modal_country_wins_over_the_first_one():
         JobListing(title="Data Engineer", company="Acme", job_url="https://acme.de/3", location="Munich"),
     ]
     assert companies_from_listings(listings, StubHttp())[0].country == "DE"
+
+
+def test_companies_outside_the_requested_geography_are_never_crawled():
+    """Geography must filter before domain resolution, not after: resolution and
+    the person cascade are the expensive steps and there is no point spending
+    them on a company the cut will discard."""
+    probed = []
+
+    class Recorder:
+        def get(self, url, **kwargs):
+            probed.append(url)
+            return url, "<html></html>"
+
+    listings = [
+        JobListing(
+            title="Backend Engineer",
+            company="Berlin Co",
+            job_url="https://berlinco.de/1",
+            location="Berlin, Germany",
+        ),
+        JobListing(
+            title="Backend Engineer",
+            company="Texas Co",
+            job_url="https://texasco.com/1",
+            location="Austin, United States",
+        ),
+    ]
+    companies = companies_from_listings(listings, Recorder(), countries=frozenset({"DE"}))
+    assert [c.name for c in companies] == ["Berlin Co"]
+    assert not any("texasco" in url for url in probed), "US company must not be probed at all"
