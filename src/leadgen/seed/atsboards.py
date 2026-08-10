@@ -40,6 +40,72 @@ _WS_RX = re.compile(r"\s+")
 
 MAX_GUESSES = 4
 
+# A German job board reports the legal entity, not the brand: "Blue Incite GmbH
+# (A company of Allianz)". Guessing from that verbatim yields
+# blueincitegmbhacompanyofallianz.de, which resolves for nobody, so the trading
+# name has to be recovered first. Ordered longest-first so "GmbH & Co. KG" is
+# removed whole rather than leaving "& Co." behind.
+_LEGAL_SUFFIXES = (
+    "gmbh & co. kg",
+    "gmbh & co kg",
+    "ag & co. kg",
+    "sp. z o.o.",
+    "s.p.a.",
+    "s.r.l.",
+    "gmbh",
+    "mbh",
+    "ug",
+    "ag",
+    "kg",
+    "ohg",
+    "gbr",
+    "se",
+    "e.v.",
+    "ev",
+    "e.k.",
+    "ltd",
+    "limited",
+    "plc",
+    "inc",
+    "llc",
+    "corp",
+    "b.v.",
+    "bv",
+    "n.v.",
+    "nv",
+    "sarl",
+    "sas",
+    "sa",
+    "spa",
+    "srl",
+    "oy",
+    "ab",
+    "as",
+    "aps",
+    "a/s",
+    "kft",
+    "zrt",
+    "holding",
+    "group",
+    "gruppe",
+)
+_PARENTHETICAL_RX = re.compile(r"\([^)]*\)")
+
+
+def _trading_name(company: str) -> str:
+    """Strip the parts of a legal name that never appear in a domain."""
+    name = _PARENTHETICAL_RX.sub(" ", (company or "").lower())
+    name = re.sub(r"[^a-z0-9\s&.-]", " ", name)
+    for _ in range(3):  # "Beispiel Holding GmbH" needs two passes
+        stripped = name
+        for suffix in _LEGAL_SUFFIXES:
+            stripped = re.sub(rf"(?:^|\s){re.escape(suffix)}(?=\s|$)", " ", stripped)
+        stripped = re.sub(r"\s+", " ", stripped).strip(" .,&-")
+        if stripped == name.strip(" .,&-"):
+            break
+        name = stripped
+    return re.sub(r"\s+", " ", name).strip(" .,&-")
+
 
 def guess_domains(slug: str, company: str = "") -> list[str]:
     """Candidate own-domains for a board slug, best guess first.
@@ -51,7 +117,7 @@ def guess_domains(slug: str, company: str = "") -> list[str]:
     and net_guard already caches the result.
     """
     stems: list[str] = []
-    for raw in (slug, company):
+    for raw in (slug, _trading_name(company), company):
         cleaned = re.sub(r"[^a-z0-9\s-]", "", (raw or "").lower()).strip()
         if not cleaned:
             continue

@@ -168,6 +168,33 @@ def test_guess_domains_is_capped(monkeypatch):
     assert len(atsboards.guess_domains("acme")) == atsboards.MAX_GUESSES
 
 
+def test_a_legal_name_is_reduced_to_the_trading_name():
+    """A German board reports the entity, not the brand. Guessing from it
+    verbatim yields blueincitegmbhacompanyofallianz.de, which is nobody."""
+    from leadgen.seed.atsboards import _trading_name
+
+    assert _trading_name("Blue Incite GmbH (A company of Allianz)") == "blue incite"
+    assert _trading_name("ottonova Holding AG") == "ottonova"
+    assert _trading_name("Muster Software GmbH & Co. KG") == "muster software"
+    assert _trading_name("Acme B.V.") == "acme"
+    assert _trading_name("Sp. z o.o. Przyklad") == "przyklad"
+
+
+def test_the_trading_name_is_tried_before_the_raw_legal_name(monkeypatch):
+    from leadgen.seed import atsboards
+
+    seen = []
+
+    def fake(host):
+        seen.append(host)
+        return False
+
+    monkeypatch.setattr(atsboards, "_resolves_to_public", fake)
+    atsboards.guess_domains("", "Blue Incite GmbH (A company of Allianz)")
+    assert "blueincite.com" in seen
+    assert seen.index("blueincite.com") < seen.index("blueincitegmbhacompanyofallianz.com")
+
+
 def test_guess_domains_tries_slug_and_company_name_variants(monkeypatch):
     from leadgen.seed import atsboards
 
