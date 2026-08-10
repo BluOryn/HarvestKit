@@ -1,0 +1,110 @@
+# Places to search, used verbatim as the search API's location parameter.
+#
+# Countries alone are not enough: each query is capped at a few hundred results,
+# so a "Germany" sweep returns the same large employers over and over while a
+# Munich Mittelstand firm never surfaces. Cities reach past that ceiling.
+#
+# The country is still read from each result, never assumed from the query, so
+# a city that turns out to be listed under a neighbouring country is labelled
+# correctly. Swap this file to target another region — nothing here is wired
+# to Europe except the contents.
+
+# --- countries ---
+Germany
+France
+Netherlands
+Spain
+Italy
+Poland
+Sweden
+Belgium
+Austria
+Denmark
+Finland
+Ireland
+Portugal
+Czechia
+Romania
+Greece
+Hungary
+Bulgaria
+Croatia
+Slovakia
+Slovenia
+Lithuania
+Latvia
+Estonia
+Luxembourg
+Malta
+Cyprus
+
+# --- cities, by weight of tech employment ---
+Berlin
+Munich
+Hamburg
+Frankfurt
+Cologne
+Stuttgart
+Düsseldorf
+Karlsruhe
+Leipzig
+Dresden
+Nuremberg
+Hannover
+Paris
+Lyon
+Toulouse
+Nantes
+Bordeaux
+Lille
+Amsterdam
+Rotterdam
+Utrecht
+Eindhoven
+The Hague
+Madrid
+Barcelona
+Valencia
+Málaga
+Seville
+Milan
+Rome
+Turin
+Bologna
+Warsaw
+Kraków
+Wrocław
+Poznań
+Gdańsk
+Stockholm
+Gothenburg
+Malmö
+Copenhagen
+Aarhus
+Helsinki
+Tampere
+Dublin
+Cork
+Lisbon
+Porto
+Prague
+Brno
+Vienna
+Graz
+Linz
+Brussels
+Antwerp
+Ghent
+Bucharest
+Cluj-Napoca
+Timișoara
+Athens
+Thessaloniki
+Budapest
+Sofia
+Zagreb
+Bratislava
+Ljubljana
+Vilnius
+Riga
+Tallinn

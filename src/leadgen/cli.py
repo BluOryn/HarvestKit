@@ -117,6 +117,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="pages per (country, keyword) pairing before moving on",
     )
     parser.add_argument(
+        "--search-locations",
+        default="",
+        help="file of place names to search, one per line, used verbatim. Defaults to the "
+        "country names implied by --countries. Cities matter because each query is "
+        "capped, so 'Berlin' reaches employers a 'Germany' query never returns",
+    )
+    parser.add_argument(
         "--search-delay",
         type=float,
         default=0.0,
@@ -207,7 +214,11 @@ def main(argv: list[str] | None = None) -> int:
                     # A cross-company search needs somewhere to search. Without
                     # --countries there is no geography to pair the keywords
                     # with, and the seed would silently return nothing.
-                    names = search_names(country_set) if country_set else []
+                    names = (
+                        _read_lines(args.search_locations)
+                        if args.search_locations
+                        else (search_names(country_set) if country_set else [])
+                    )
                     if keywords and not names:
                         log.warning("seed: --search-keywords needs --countries; skipping search seed")
                     log.info(

@@ -109,6 +109,16 @@ def test_requests_can_be_paced_between_pages_but_not_before_the_first():
     assert waits == [1.5]
 
 
+def test_a_city_query_labels_the_country_from_the_result_not_the_query():
+    """Searching "Berlin" must not assume Germany — the API states the country,
+    and a city listed under a neighbour has to come out right."""
+    http = FakeHttp(
+        {"jobs.workable.com": {"jobs": [_workable_job(country="Austria")], "nextPageToken": None}}
+    )
+    listings = search_workable(http, countries=["Berlin"], keywords=["dev"])
+    assert listings[0].country == "AT"
+
+
 def test_no_pacing_by_default():
     waits: list[float] = []
     http = FakeHttp({"jobs.workable.com": {"jobs": [_workable_job()], "nextPageToken": None}})
