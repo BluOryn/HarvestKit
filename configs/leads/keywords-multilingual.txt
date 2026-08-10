@@ -49,3 +49,32 @@ udvikler
 programista
 programátor
 fejlesztő
+
+# Second sweep: same languages, adjacent roles. Each query is capped at ~100
+# results, so more terms is the only way to reach deeper into one country.
+Anwendungsentwickler
+IT-Systemadministrator
+Netzwerktechniker
+Softwareingenieur
+Datenbankentwickler
+IT-Support
+Wirtschaftsinformatiker
+Cloud-Architekt
+technicien informatique
+administrateur systeme
+chef de projet informatique
+analyste
+tecnico informatico
+programmatore
+analista
+ingeniero de software
+tecnico de sistemas
+analista programador
+systeemontwikkelaar
+applicatiebeheerder
+administrator systemow
+inzynier oprogramowania
+systemutvecklare
+systemvetare
+softwareudvikler
+ohjelmistokehittaja
