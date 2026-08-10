@@ -1,0 +1,51 @@
+# Search terms for SmartRecruiters, which ignores every geography parameter it
+# was offered. The language of the query is therefore the geography filter:
+# "Softwareentwickler" is advertised by German and Austrian employers and
+# almost nobody else. The country is still read from the API response, so this
+# selects the candidate pool without being trusted for the label.
+#
+# To target another region, swap this vocabulary — nothing here is wired to
+# Europe except the choice of languages.
+
+# German — DE, AT, CH
+Entwickler
+Softwareentwickler
+Systemadministrator
+Fachinformatiker
+Netzwerkadministrator
+Webentwickler
+IT-Berater
+IT-Sicherheit
+IT-Projektleiter
+Informatiker
+
+# French — FR, BE, LU
+développeur
+ingénieur
+informatique
+informaticien
+architecte
+
+# Italian — IT
+sviluppatore
+informatico
+sistemista
+
+# Spanish and Portuguese — ES, PT
+desarrollador
+programador
+informático
+
+# Dutch — NL, BE
+ontwikkelaar
+systeembeheerder
+
+# Nordic — SE, DK, FI
+utvecklare
+mjukvaruutvecklare
+udvikler
+
+# Central and Eastern Europe — PL, CZ, HU, RO
+programista
+programátor
+fejlesztő

@@ -13,11 +13,12 @@ from job_scraper.http import HttpClient
 
 from .checkpoint import Checkpoint
 from .export import write_csv
-from .geo import EFTA_AND_UK, EU_COUNTRIES
+from .geo import EFTA_AND_UK, EU_COUNTRIES, search_names
 from .pipeline import process_companies
 from .score.quota import select
 from .seed.atsboards import fetch_boards, guess_domains
 from .seed.jobboard import companies_from_listings
+from .seed.jobsearch import search_all
 
 log = logging.getLogger("leadgen")
 
@@ -44,13 +45,20 @@ def _build_http(config) -> HttpClient:
     )
 
 
+def _read_lines(path: str) -> list[str]:
+    """Non-empty, non-comment lines. Keywords may contain spaces, so no split."""
+    lines: list[str] = []
+    for raw in Path(path).read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if line:
+            lines.append(line)
+    return lines
+
+
 def _read_boards(path: str) -> list[tuple[str, str]]:
     """Parse `<kind> <slug>  # comment` lines into (kind, slug) pairs."""
     boards: list[tuple[str, str]] = []
-    for raw in Path(path).read_text(encoding="utf-8").splitlines():
-        line = raw.split("#", 1)[0].strip()
-        if not line:
-            continue
+    for line in _read_lines(path):
         parts = line.split()
         if len(parts) >= 2:
             boards.append((parts[0], parts[1]))
@@ -88,6 +96,24 @@ def build_parser() -> argparse.ArgumentParser:
         "--boards",
         default="",
         help="file of '<kind> <slug>' public ATS boards to seed from, in addition to config targets",
+    )
+    parser.add_argument(
+        "--search-keywords",
+        default="",
+        help="file of search terms for the cross-company job-search seed; paired with every "
+        "country in --countries, which is what makes the seed geography-first",
+    )
+    parser.add_argument(
+        "--search-keywords-multilingual",
+        default="",
+        help="file of native-language search terms for SmartRecruiters, which offers no "
+        "geography parameter of its own",
+    )
+    parser.add_argument(
+        "--search-max-pages",
+        type=int,
+        default=15,
+        help="pages per (country, keyword) pairing before moving on",
     )
     parser.add_argument("--target", type=int, default=1000, help="exact number of rows wanted")
     parser.add_argument("--output", default="output/leads.csv")
@@ -142,6 +168,7 @@ def main(argv: list[str] | None = None) -> int:
 
     config = load_config(resolve_config_path(args.config))
     checkpoint = Checkpoint(args.checkpoint)
+    country_set = _country_set(args.countries)
 
     try:
         if not args.select_only:
@@ -152,13 +179,42 @@ def main(argv: list[str] | None = None) -> int:
                     boards = _read_boards(args.boards)
                     log.info("seed: %d public ATS boards", len(boards))
                     listings.extend(fetch_boards(boards, http))
+                if args.search_keywords or args.search_keywords_multilingual:
+                    keywords = _read_lines(args.search_keywords) if args.search_keywords else []
+                    multilingual = (
+                        _read_lines(args.search_keywords_multilingual)
+                        if args.search_keywords_multilingual
+                        else []
+                    )
+                    # A cross-company search needs somewhere to search. Without
+                    # --countries there is no geography to pair the keywords
+                    # with, and the seed would silently return nothing.
+                    names = search_names(country_set) if country_set else []
+                    if keywords and not names:
+                        log.warning("seed: --search-keywords needs --countries; skipping search seed")
+                    log.info(
+                        "seed: job search over %d countries x %d keywords, %d multilingual",
+                        len(names),
+                        len(keywords),
+                        len(multilingual),
+                    )
+                    listings.extend(
+                        search_all(
+                            http,
+                            countries=names,
+                            keywords=keywords,
+                            smartrecruiters_keywords=multilingual,
+                            max_pages=args.search_max_pages,
+                            concurrency=args.concurrency,
+                        )
+                    )
                 log.info("seed: %d listings total", len(listings))
                 companies = companies_from_listings(
                     listings,
                     http,
                     guess_domains=guess_domains,
                     concurrency=args.concurrency * 2,
-                    countries=_country_set(args.countries),
+                    countries=country_set,
                 )
                 log.info("seed: %d unique companies with a resolved own-domain", len(companies))
                 funnel = process_companies(
@@ -181,7 +237,6 @@ def main(argv: list[str] | None = None) -> int:
             if args.roles.strip().lower() == "any"
             else frozenset(part.strip() for part in args.roles.split(",") if part.strip())
         )
-        country_set = _country_set(args.countries)
         leads, report = select(
             checkpoint.all_leads(),
             target=args.target,

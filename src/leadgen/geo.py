@@ -291,6 +291,27 @@ def country_from_location(text: str) -> str:
     return ""
 
 
+def search_name(code: str) -> str:
+    """The English name for a country code, for search APIs that take a place
+    name rather than a code.
+
+    Derived by inverting COUNTRY_NAMES rather than kept as a second list: the
+    English name is the first spelling recorded for every code, and one table
+    that cannot drift out of step with itself beats two that can.
+    """
+    return _SEARCH_NAMES.get((code or "").strip().upper(), "")
+
+
+def search_names(codes) -> list[str]:
+    """Names for a set of codes, skipping any this module cannot name."""
+    return sorted(name for code in codes if (name := search_name(code)))
+
+
+_SEARCH_NAMES: dict[str, str] = {}
+for _name, _code in COUNTRY_NAMES.items():
+    _SEARCH_NAMES.setdefault(_code, _name.title())
+
+
 def is_european(code: str) -> bool:
     upper = (code or "").upper()
     return upper in EU_COUNTRIES or upper in EFTA_AND_UK

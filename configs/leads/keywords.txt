@@ -1,0 +1,27 @@
+# Search terms for the cross-company job-search seed (Workable).
+# Paired with every requested country, so these stay role-generic and the
+# geography comes from the --countries flag. One term per line.
+#
+# The brief is "technology verticals, or any sector which employs IT", so this
+# targets the role rather than the industry: a logistics firm hiring one
+# sysadmin qualifies just as much as a software house.
+software engineer
+developer
+IT
+data
+devops
+cloud
+security
+backend
+frontend
+full stack
+architect
+system administrator
+network
+database
+QA engineer
+machine learning
+technical lead
+support engineer
+python
+java
