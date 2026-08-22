@@ -15,6 +15,7 @@ from threading import Lock
 from .assemble import CompanyContext, build_leads
 from .checkpoint import Checkpoint
 from .person.cascade import resolve_people
+from .person.register import people_from_register
 from .person.roles import TARGET_FAMILIES
 
 log = logging.getLogger(__name__)
@@ -29,8 +30,10 @@ def process_companies(
     smtp: bool = True,
     max_pages: int = 8,
     max_person_pages: int = 10,
+    max_nav_pages: int = 6,
     guess_without_anchor: bool = True,
     stop_after: int | None = None,
+    register: bool = False,
 ) -> Counter:
     """Resolve people for each company and persist the resulting leads.
 
@@ -52,6 +55,7 @@ def process_companies(
             http,
             max_pages=max_pages,
             max_person_pages=max_person_pages,
+            max_nav_pages=max_nav_pages,
         )
         checkpoint.record_company(company.domain)
         # People named in the company's own ads cost no extra request and are
@@ -62,6 +66,16 @@ def process_companies(
             with counter_lock:
                 funnel["ad_contacts"] += len(company.ad_contacts)
             hits = hits + company.ad_contacts
+        # The public record, only for companies that named nobody themselves.
+        # It costs two requests and answers a question the site already
+        # answered for everyone else, so it runs last and only when it has to.
+        if register and not hits and company.name:
+            found = people_from_register(company.name, http)
+            if found:
+                with counter_lock:
+                    funnel["register_people"] += len(found)
+                    funnel["register_companies"] += 1
+                hits = found
         if not hits:
             with counter_lock:
                 funnel["no_person_found"] += 1

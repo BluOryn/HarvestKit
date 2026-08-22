@@ -14,18 +14,22 @@ from job_scraper.http import HttpClient
 from .checkpoint import Checkpoint
 from .export import write_csv
 from .geo import EFTA_AND_UK, EU_COUNTRIES, search_names
+from .person import register
 from .pipeline import process_companies
 from .score.quota import select
 from .seed.arbeitnow import fetch as fetch_arbeitnow
 from .seed.atsboards import fetch_boards, guess_domains
 from .seed.jobboard import companies_from_listings
+from .seed.jobsch import DEFAULT_FILTER_URL as JOBSCH_FILTER_URL
+from .seed.jobsch import fetch as fetch_jobsch
 from .seed.jobsearch import search_all
 
 log = logging.getLogger("leadgen")
 
 
-def _build_http(config) -> HttpClient:
+def _build_http(config, *, robots_exempt_hosts: tuple[str, ...] = ()) -> HttpClient:
     return HttpClient(
+        robots_exempt_hosts=robots_exempt_hosts,
         user_agent=config.run.user_agent,
         delay_seconds=config.run.delay_seconds,
         obey_robots=config.run.obey_robots,
@@ -138,6 +142,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="pages to walk of the Arbeitnow German job feed (0 disables). Paced at "
         "5s a page because the API refuses anything faster",
     )
+    parser.add_argument(
+        "--jobsch-pages",
+        type=int,
+        default=0,
+        help="pages of the jobs.ch filtered search to walk (0 disables). The Swiss "
+        "seed: 83%% of its employers publish their own website in the posting, "
+        "which skips domain resolution entirely",
+    )
+    parser.add_argument(
+        "--jobsch-url",
+        default=JOBSCH_FILTER_URL,
+        help="jobs.ch search URL whose filter defines the sector and recency window. "
+        "Defaults to the shipped IT filter (4 categories, 4 employment types, 30 days)",
+    )
     parser.add_argument("--target", type=int, default=1000, help="exact number of rows wanted")
     parser.add_argument("--output", default="output/leads.csv")
     parser.add_argument("--checkpoint", default=".cache/leadgen.sqlite")
@@ -148,6 +166,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="per-person pages mined from each company's sitemap (0 disables)",
+    )
+    parser.add_argument(
+        "--max-nav-pages",
+        type=int,
+        default=6,
+        help="people-pages followed from each company's own navigation (0 disables). "
+        "A guessed path only finds a layout somebody anticipated; this finds whatever "
+        "the site actually calls its team page",
     )
     parser.add_argument("--country-ceiling", type=float, default=0.25)
     parser.add_argument(
@@ -176,6 +202,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--select-only", action="store_true", help="skip harvesting, re-cut the existing checkpoint"
     )
+    parser.add_argument(
+        "--register",
+        action="store_true",
+        help="for companies whose own site names nobody, read the board and officers out of "
+        f"the Swiss commercial register (needs {register.USER_ENV}/{register.PASSWORD_ENV})",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     return parser
 
@@ -193,15 +225,39 @@ def main(argv: list[str] | None = None) -> int:
     checkpoint = Checkpoint(args.checkpoint)
     country_set = _country_set(args.countries)
 
+    if args.register and not register.is_configured():
+        # Silently doing nothing would look like "the register had no data on
+        # these companies", which is a very different conclusion.
+        log.warning(
+            "--register was asked for but %s/%s are not set, so the commercial register "
+            "will not be consulted; register free at %s",
+            register.USER_ENV,
+            register.PASSWORD_ENV,
+            "https://www.zefix.admin.ch/en/search/entity/welcome",
+        )
+
     try:
         if not args.select_only:
-            http = _build_http(config)
+            # The register API disallows anonymous crawlers in robots.txt and
+            # issues credentials instead; holding those credentials is the
+            # authorisation, so that one host -- and only it -- is exempted.
+            exempt = (register.API_HOST,) if (args.register and register.is_configured()) else ()
+            http = _build_http(config, robots_exempt_hosts=exempt)
             try:
                 listings = _collect_listings(config, http)
                 if args.boards:
                     boards = _read_boards(args.boards)
                     log.info("seed: %d public ATS boards", len(boards))
                     listings.extend(fetch_boards(boards, http))
+                jobsch_listings: list = []
+                if args.jobsch_pages:
+                    jobsch_listings = fetch_jobsch(
+                        http,
+                        filter_url=args.jobsch_url,
+                        max_pages=args.jobsch_pages,
+                        concurrency=args.concurrency,
+                    )
+                    listings.extend(jobsch_listings)
                 if args.arbeitnow_pages:
                     listings.extend(fetch_arbeitnow(http, max_pages=args.arbeitnow_pages))
                 if args.search_keywords or args.search_keywords_multilingual:
@@ -239,13 +295,30 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     )
                 log.info("seed: %d listings total", len(listings))
+                jobsch_urls = {id(item) for item in jobsch_listings}
+                other = [item for item in listings if id(item) not in jobsch_urls]
                 companies = companies_from_listings(
-                    listings,
+                    other,
                     http,
                     guess_domains=guess_domains,
                     concurrency=args.concurrency * 2,
                     countries=country_set,
                 )
+                if jobsch_listings:
+                    # The jobs.ch filter already chose the sector, so its postings
+                    # skip the title gate rather than being re-judged by it.
+                    seen_domains = {company.domain for company in companies}
+                    for company in companies_from_listings(
+                        jobsch_listings,
+                        http,
+                        guess_domains=guess_domains,
+                        concurrency=args.concurrency * 2,
+                        countries=country_set,
+                        require_it_role=False,
+                    ):
+                        if company.domain not in seen_domains:
+                            seen_domains.add(company.domain)
+                            companies.append(company)
                 log.info("seed: %d unique companies with a resolved own-domain", len(companies))
                 funnel = process_companies(
                     companies,
@@ -255,8 +328,10 @@ def main(argv: list[str] | None = None) -> int:
                     smtp=not args.no_smtp,
                     max_pages=args.max_pages,
                     max_person_pages=args.max_person_pages,
+                    max_nav_pages=args.max_nav_pages,
                     guess_without_anchor=not args.no_guess,
                     stop_after=int(args.target * args.overfetch) if args.overfetch else None,
+                    register=args.register,
                 )
                 log.info("funnel: %s", dict(funnel))
             finally:
