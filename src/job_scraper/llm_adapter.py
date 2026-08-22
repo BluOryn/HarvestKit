@@ -69,7 +69,10 @@ HAIKU_PRICE_IN_PER_M = 1.0
 HAIKU_PRICE_OUT_PER_M = 5.0
 
 
-_lock = threading.Lock()
+# Re-entrant on purpose: `_warn_once` takes this lock, and it is called from
+# inside `llm_enrich`'s budget check, which already holds it. With a plain Lock
+# the first worker to exhaust the monthly budget deadlocked the whole pool.
+_lock = threading.RLock()
 # One SQLite handle per cache path, reused across calls — the previous code
 # opened and closed a connection (and re-ran CREATE TABLE) on every page.
 _CONNECTIONS: dict[str, sqlite3.Connection] = {}
