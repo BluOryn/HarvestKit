@@ -104,9 +104,9 @@ class SmartRecruitersAdapter(BaseAdapter):
 
     def _extract_slug(self, url: str) -> str:
         parsed = urlparse(url)
+        host = parsed.netloc.lower()
         path = parsed.path.strip("/")
         if not path:
-            host = parsed.netloc.lower()
             if host.startswith("jobs.smartrecruiters.com"):
                 return ""
             return host.split(".")[0]
@@ -115,4 +115,9 @@ class SmartRecruitersAdapter(BaseAdapter):
             idx = parts.index("companies")
             if idx + 1 < len(parts):
                 return parts[idx + 1]
+        # On the public board the company is the FIRST segment:
+        # jobs.smartrecruiters.com/<Company>/<postingId>. Taking the last one
+        # resolved the posting id as the slug and every lookup returned nothing.
+        if host.endswith("smartrecruiters.com"):
+            return parts[0]
         return parts[-1] if parts else ""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 
@@ -221,3 +222,82 @@ def test_host_throttle_is_thread_safe():
     for t in threads:
         t.join()
     assert peak <= 2
+
+
+# --- jobs.ch shapes -------------------------------------------------------
+# A live jobs.ch detail page carries a full JSON-LD body, a nav bar whose links
+# include the word "Recruiter", and a "similar jobs" rail advertising a
+# different employer's role. Each of those broke a different field.
+
+_JOBSCH_POSTING = json.dumps(
+    {
+        "@context": "https://schema.org",
+        "@type": "JobPosting",
+        "title": "Senior Model-Based System Engineer",
+        "description": "<p>"
+        + "At Belimo we build actuators and sensors for heating and ventilation. " * 8
+        + "You will own the model-based systems engineering toolchain.</p>",
+        "hiringOrganization": {"@type": "Organization", "name": "BELIMO Automation AG"},
+        "applicantLocationRequirements": {"@type": "Country", "name": "Switzerland"},
+        "jobLocation": {
+            "@type": "Place",
+            "address": {
+                "@type": "PostalAddress",
+                "addressRegion": "Hinwil",
+                "postalCode": "8340",
+                "addressCountry": "CH",
+            },
+        },
+        "occupationalCategory": {
+            "@type": "CategoryCode",
+            "codeValue": "98",
+            "name": "Technical / Electronics",
+        },
+        "industry": "Industry various",
+    }
+)
+
+_JOBSCH_HTML = f"""
+<html><head><script type="application/ld+json">{_JOBSCH_POSTING}</script></head>
+<body>
+  <nav>{"".join(f'<a href="/{i}">link{i}</a>' for i in range(14))}
+    <a href="/r">Recruiter</a><a href="/a">Area</a><a href="/d">Deutsch</a></nav>
+  <main><h1>Senior Model-Based System Engineer</h1></main>
+  <aside><h2>Similar jobs</h2>
+    <p>DevSecOps Engineer (alle) LEGIC Identsystems AG Wallisellen Homeoffice</p></aside>
+</body></html>
+"""
+
+
+def _jobsch_job():
+    return extract_job_from_page(_JOBSCH_HTML, "https://www.jobs.ch/en/vacancies/detail/abc/")
+
+
+def test_applicant_location_requirements_alone_does_not_mean_remote():
+    """jobs.ch stamps "Country: Switzerland" on every posting, so treating its
+    presence as remote marked 100% of them remote — street address and all."""
+    assert _jobsch_job().remote_type == ""
+
+
+def test_a_typed_category_node_is_read_as_its_name():
+    """`occupationalCategory` arrives as a CategoryCode object; str() on it put a
+    Python dict repr in the department column."""
+    job = _jobsch_job()
+    assert job.department == "Technical / Electronics"
+    assert job.company_industry == "Industry various"
+
+
+def test_a_recruiter_is_not_mined_out_of_the_site_navigation():
+    """ "… Salary estimator Recruiter Area Deutsch Français" is a nav bar, and it
+    yielded "Area Deutsch" as the recruiter on every posting on the site."""
+    job = _jobsch_job()
+    assert job.recruiter_name == ""
+    assert job.recruiter_title == ""
+
+
+def test_a_neighbouring_employers_card_does_not_contribute_to_this_posting():
+    """The "similar jobs" rail belongs to other companies. Scanning it tagged a
+    mechanical-engineering role "devsecops" and made it remote via Homeoffice."""
+    job = _jobsch_job()
+    assert "devsecops" not in job.tech_stack.lower()
+    assert job.remote_type == ""

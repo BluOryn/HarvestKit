@@ -203,10 +203,9 @@ def _apply_jsonld(j: JobListing, ld: dict[str, Any]) -> None:
             j.region = j.region or _str(addr.get("addressRegion"))
             j.country = j.country or _str(country)
             j.postal_code = j.postal_code or _str(addr.get("postalCode"))
-            street = _str(addr.get("streetAddress"))
-            if street and not j.location:
-                # streetAddress alone isn't useful; only include if we have anything else
-                pass
+            # streetAddress is deliberately not folded into `location`: on its own
+            # it is a doorstep, not a place, and the locality/region/country parts
+            # above already carry what a location filter matches on.
     if loc_strs:
         j.location = j.location or " | ".join([s for s in loc_strs if s])
 
@@ -216,7 +215,12 @@ def _apply_jsonld(j: JobListing, ld: dict[str, Any]) -> None:
         # If no physical location, mark location as "Remote" so it's not empty
         if not j.location:
             j.location = "Remote"
-    elif ld.get("applicantLocationRequirements"):
+    elif ld.get("applicantLocationRequirements") and not loc_strs:
+        # `applicantLocationRequirements` says where an applicant may *live*, not
+        # that the role is remote. jobs.ch stamps "Country: Switzerland" on every
+        # posting, so keying remote off its mere presence marked 100% of them
+        # remote — including ones with a street address. Only a posting with no
+        # physical jobLocation at all is inferred remote from it.
         j.remote_type = j.remote_type or "remote"
         if not j.location:
             j.location = "Remote"
@@ -280,14 +284,12 @@ def _apply_jsonld(j: JobListing, ld: dict[str, Any]) -> None:
 
     # Schema.org distinguishes occupationalCategory (job function) from industry (employer's sector).
     # Map them to department vs company_industry respectively.
-    occ = ld.get("occupationalCategory")
+    occ = _named(ld.get("occupationalCategory"))
     if occ:
-        j.department = j.department or _str(occ if not isinstance(occ, list) else ", ".join(map(str, occ)))
-    ind = ld.get("industry")
+        j.department = j.department or occ
+    ind = _named(ld.get("industry"))
     if ind:
-        j.company_industry = j.company_industry or _str(
-            ind if not isinstance(ind, list) else ", ".join(map(str, ind))
-        )
+        j.company_industry = j.company_industry or ind
 
     if not j.raw_jsonld:
         try:
@@ -1132,10 +1134,22 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
     body = soup.find("body") or soup
     page_text = body.get_text(" ", strip=True)
 
-    # Include the structured description. On ATS pages the entire job body lives
-    # in the JSON-LD `description` and never appears in the DOM, so scanning the
-    # DOM alone missed the tech stack, salary and seniority for those postings.
-    text = page_text if not j.description else f"{page_text} {j.description}"
+    # Scope matters more than reach here. A job board renders "similar jobs"
+    # cards from *other employers* on every detail page, so scanning the whole
+    # document attributed their tech stack, their "Homeoffice" and — worse for
+    # anyone working the output — their phone numbers and emails to this
+    # posting. Measured on jobs.ch: a mechanical-engineering role came out
+    # tagged "devsecops" from a neighbouring card, and every posting whose
+    # sidebar mentioned Homeoffice came out remote.
+    #
+    # When the structured description is substantial it *is* the job body, so it
+    # is the correct and sufficient haystack. The page text is still used when
+    # there is no real description — that is the ATS case this used to serve,
+    # where the DOM holds the body and JSON-LD holds nothing.
+    if len(j.description) >= SELF_CONTAINED_DESCRIPTION_CHARS:
+        text = j.description
+    else:
+        text = f"{page_text} {j.description}".strip()
     text = text[:200000]
 
     techs = _detect_tech(text)
@@ -1308,10 +1322,32 @@ RECRUITER_TITLE_RX = re.compile(
 PERSON_NAME_RX = re.compile(r"\b([A-ZÄÖÜ][a-zäöüß]+(?:[\s-][A-ZÄÖÜ][a-zäöüß]+){1,3})\b")
 LINKEDIN_RX = re.compile(r"https?://(?:[a-z]+\.)?linkedin\.com/in/[A-Za-z0-9-_%]+", re.I)
 
+# A recruiter block links to a mailbox, a profile, maybe a phone. A site header
+# links to everything. jobs.ch's nav says "… Salary estimator Recruiter Area
+# Deutsch Français English Login", which matched the recruiter-title regex and
+# then yielded "Area Deutsch" as the person — on every posting on the site.
+_CHROME_LINK_DENSITY = 12
+
+
+def _is_site_chrome(el: Tag) -> bool:
+    """True when `el` is (or sits inside) site navigation rather than content."""
+    for node in (el, *el.parents):
+        name = getattr(node, "name", None)
+        if name in ("nav", "header"):
+            return True
+        if name in ("body", "html", "[document]", None):
+            break
+    role = _attr(el, "role").lower()
+    if role in ("navigation", "banner", "menubar", "menu"):
+        return True
+    return len(el.find_all("a")) > _CHROME_LINK_DENSITY
+
 
 def _apply_recruiter(j: JobListing, soup: BeautifulSoup) -> None:
     candidates = soup.find_all(["section", "aside", "footer", "div", "article"])
     for el in candidates:
+        if _is_site_chrome(el):
+            continue
         text = el.get_text(" ", strip=True)
         if len(text) > 1000:
             text = text[:1000]
@@ -1363,6 +1399,11 @@ APPLY_PATH_RX = re.compile(r"/(apply|application|bewerb|postuler|candidat|submis
 
 # Below this the description is treated as a stub worth improving on.
 MIN_DESCRIPTION_CHARS = 50
+
+# Above this a structured description is the whole job body, so the heuristics
+# can scan it alone instead of the surrounding page. Comfortably longer than a
+# card snippet or an og:description, comfortably shorter than a real posting.
+SELF_CONTAINED_DESCRIPTION_CHARS = 400
 
 # Ordered narrowest-useful-first: semantic landmarks, then class-name guesses.
 DESCRIPTION_SELECTORS = (
@@ -1495,6 +1536,28 @@ def _str(v: Any) -> str:
         return ""
     if isinstance(v, (list, tuple)):
         return ", ".join(str(x).strip() for x in v if x)
+    return str(v).strip()
+
+
+def _named(v: Any) -> str:
+    """Flatten a Schema.org value that may be a bare string, a list, or a typed
+    node such as `CategoryCode` / `DefinedTerm`.
+
+    jobs.ch sends `occupationalCategory` as a CategoryCode object, and `str()` on
+    it produced a literal Python dict repr in the CSV:
+        {'@type': 'CategoryCode', 'codeValue': '98', 'name': 'Technical / ...'}
+    """
+    if v is None:
+        return ""
+    if isinstance(v, dict):
+        for key in ("name", "title", "value", "codeValue", "termCode"):
+            named = v.get(key)
+            if isinstance(named, str) and named.strip():
+                return named.strip()
+        return ""
+    if isinstance(v, (list, tuple)):
+        parts = [_named(x) for x in v]
+        return ", ".join(p for p in parts if p)
     return str(v).strip()
 
 

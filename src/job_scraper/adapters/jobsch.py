@@ -136,12 +136,14 @@ class JobsChAdapter(BaseAdapter):
         # Pick the English detail URL; fall back to whatever's available.
         links = doc.get("_links") or {}
         detail = ""
+        # First hit wins, so the tuple order is the language preference. The
+        # previous loop only broke on `detail_en`, so a posting with both a
+        # German and a French link came out French.
         for key in ("detail_en", "detail_de", "detail_fr"):
             entry = links.get(key)
             if isinstance(entry, dict) and entry.get("href"):
                 detail = entry["href"]
-                if key == "detail_en":
-                    break
+                break
         title = doc.get("title") or ""
         company = doc.get("company_name") or ""
         place = doc.get("place") or ""
