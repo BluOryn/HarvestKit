@@ -108,7 +108,7 @@ so European names import correctly without any encoding dance.
 
 | Column | Meaning |
 |---|---|
-| `email_status` | `published` (printed on their site) > `verified` (SMTP confirmed) > `inferred_high` (pattern from 2+ known addresses) > `inferred_medium` (pattern from 1) > `inferred_low` (**no anchor at all** — the modal `first.last` applied blind) > `unknown` (probe refused) > `catch_all` (domain accepts everything — unverifiable) |
+| `email_status` | `published` (printed on their site) > `verified` (the domain rejects unknown recipients, so a wrong guess would have bounced — the address itself is still derived) > `inferred_high` (pattern from 2+ known addresses) > `inferred_medium` (pattern from 1) > `inferred_low` (**no anchor at all** — the modal `first.last` applied blind) > `unknown` (probe refused) > `catch_all` (domain accepts everything — unverifiable) |
 | `email_confidence` | `high` / `medium` / `low` — set only for inferred rows |
 | `person_role_family` | `hr` / `tech_leadership` / `executive` / `other` |
 | `evidence_json` | Source URL per field. `inferred:first.last` means the address was derived, not found |
@@ -175,3 +175,163 @@ professional-context fields are collected, and everything came from public pages
 The obligations that fall on the *sender*, not on this tool: a privacy notice at
 first contact, an honest and working opt-out, and honouring objections. Worth
 stating explicitly when handing the file over.
+
+---
+
+# Swiss IT lead list — jobs.ch
+
+The Swiss variant of the run above. Same pipeline, different seed.
+
+## The filter
+
+Everything downstream is decided by one URL, shipped as the default of
+`--jobsch-url` and defined in `src/leadgen/seed/jobsch.py`:
+
+```
+https://www.jobs.ch/en/vacancies/
+  ?category=106&category=146&category=156&category=167
+  &employment-type=1&employment-type=2&employment-type=4&employment-type=5
+  &publication-date=30&term=
+```
+
+| Part | Meaning |
+|---|---|
+| `category=106` | Information technology / Telecom. |
+| `category=146` | Engineering / Technical |
+| `category=156` | Management / Consulting |
+| `category=167` | Electronics / Electrotechnics |
+| `employment-type=1,2,4,5` | Permanent and fixed-term staff contracts — apprenticeships and internships are deliberately excluded |
+| `publication-date=30` | Posted in the last 30 days |
+| `term=` | No keyword: the categories do the targeting |
+
+The SSR HTML at `/en/vacancies/` honours this filter; the public JSON API at
+`/api/v1/public/search` ignores it entirely and returns the whole corpus, which
+is why the seed reads HTML. At the time of writing the filter reports ~1,440
+matching jobs, 22 per page, so ~35 pages covers it.
+
+Change the sector by changing the URL, not the code:
+
+```bash
+python run_leads.py --config configs/leads/swiss-it.yaml \
+    --jobsch-url 'https://www.jobs.ch/en/vacancies/?category=106&publication-date=7' \
+    --jobsch-pages 40 --countries CH --target 100
+```
+
+## Run it
+
+```bash
+python run_leads.py --config configs/leads/swiss-it.yaml \
+    --jobsch-pages 35 --countries CH --target 200 \
+    --concurrency 12 --overfetch 8 2>&1 | tee output/swiss.log
+```
+
+Drop `--no-smtp` only where outbound port 25 is open; most consumer and cloud
+networks block it, and the run is faster and no less honest without it.
+
+## Why this seed beats the others for Switzerland
+
+- **The employer's own domain arrives free.** `hiringOrganization.sameAs` in the
+  posting carries the company website for 83% of employers (measured over 52).
+  Domain resolution is the slowest and most lossy step in the pipeline and this
+  skips it outright.
+- **Swiss ads name a human.** 36% of ads print a contact with a direct phone
+  ("Fragen zur Funktion — Philipp Klett, Leiter Data Management, +41 …"), which
+  `person.jobad` reads straight out of the description. ATS feeds do not.
+- **No ad carries an e-mail.** jobs.ch masks them behind an "E-Mail schreiben"
+  link, so 0% of ads yield an address. Every address therefore comes from the
+  company site — the Impressum, the Geschäftsleitung page, the team page — which
+  is why `--max-pages` matters more here than on the German run.
+
+## Measured yield
+
+One run over 12 of the ~35 pages: 522 postings -> 143 companies -> 2,276 people
+found -> **188 delivered rows** (53% executive, 40% HR, 7% tech leadership),
+every row with a name, an address, a country and a source URL. A full 35-page
+pass is roughly 3x that, so 100+/day sits inside a single daily run.
+
+Per-company coverage on that run: **80% of companies yielded at least one named
+person, 43% yielded someone in a target family.**
+
+## Getting every name, not just the target families
+
+The three target families are a *filter*, not the ceiling. The same crawl banked
+2,266 people; the cut discarded 2,071 of them purely for role. To keep everyone:
+
+```bash
+python run_leads.py --config configs/leads/swiss-it.yaml     --select-only --roles any --target 2000     --checkpoint .cache/swiss.sqlite --output output/all-people.csv
+```
+
+`--select-only` re-cuts the existing checkpoint, so this costs no requests and
+runs instantly. On the run above it produced **2,000 rows**.
+
+## Where the remaining coverage goes
+
+29 of 143 companies named nobody anywhere on their site. That is not a parsing
+failure — consumer brands (Victorinox, FREITAG) and large groups simply do not
+publish staff. Reaching those needs a different source, not a better parser,
+which is what `--register` below is for.
+
+Three things buy coverage inside the current design, in order of effect:
+
+| Lever | Why |
+|---|---|
+| `--max-pages 10` or higher | Each guessed path is one more chance at an Impressum or team page |
+| `--max-nav-pages` (default 6) | Follows the site's *own* navigation — this is what took coverage from 61% to 80%, because a guessed path only finds a layout somebody anticipated |
+| `--max-person-pages 8` | Per-person pages listed in the site's sitemap, known to exist |
+
+## The commercial register — for companies that publish no staff at all
+
+Swiss law requires every registered company to file its board, its managing
+officers and everyone holding signature authority, and to publish every change
+in the Swiss Official Gazette of Commerce. That record names exactly the people
+this list targets, and it exists for companies whose own website names nobody.
+
+`--register` consults it, and only for those companies:
+
+```bash
+python run_leads.py --config configs/leads/swiss-it.yaml \
+    --jobsch-pages 40 --countries CH --target 100 --register \
+    --checkpoint .cache/swiss.sqlite --output output/swiss-leads.csv
+```
+
+### Setting it up
+
+The Zefix Public REST API is free but credentialled. Register at
+<https://www.zefix.admin.ch/en/search/entity/welcome>, then:
+
+```bash
+export ZEFIX_USER=your-account
+export ZEFIX_PASSWORD=your-password
+```
+
+Without both variables `--register` logs a warning and does nothing — it does
+not fall back to scraping the public site, which disallows crawlers in
+robots.txt. Holding credentials *is* the authorisation, which is why the run
+exempts that one host from robots and no other.
+
+### What it will and will not give you
+
+| | |
+|---|---|
+| Names | Board members, directors, managing officers, authorised signatories |
+| Roles | `Präsident des Verwaltungsrates`, `Direktor`, `Geschäftsführer`, `directeur` — all classify as **executive** |
+| Emails | None. The register publishes no addresses, so these rows depend on pattern inference like any other |
+| Coverage | Only companies whose registered name matches exactly |
+
+The match is deliberately strict — whole name, after folding away accents,
+punctuation and legal form. `Deloitte` matches `Deloitte AG` and
+`Elektro Material` matches `ELEKTRO-MATERIAL AG`, but `Kistler` does **not**
+match the sole trader `Andy Kistler`, and `FREITAG` does not match
+`FREITAGS AG`. A near miss is a different company, and a lead filed under the
+wrong company is worse than no lead: nothing downstream can tell it is wrong.
+
+Departures are excluded. One publication announces arrivals and departures in
+the same paragraph, and the parser cuts the `Ausgeschiedene Personen` /
+`Personnes radiées` section away before reading anything.
+
+### Attribution
+
+Zefix data is open government data under
+[opendata.swiss "Open use. Must provide the source."](https://opendata.swiss/en/terms-of-use#terms_by).
+Every register-sourced row carries the entity's Zefix detail URL in
+`source_person_url`; keep that column when you pass the list on.

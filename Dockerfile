@@ -28,7 +28,12 @@ RUN apt-get update \
 
 COPY pyproject.toml requirements.txt README.md LICENSE ./
 COPY src ./src
-COPY run.py ./
+# Both entry points ship: the lead run and its inspection tools were added after
+# this image and were missing, so the containerised workflow docs/RUNBOOK-leads.md
+# describes could not actually run. Override the entrypoint to reach them:
+#   docker run --rm --entrypoint python harvestkit:local run_leads.py --help
+COPY run.py run_leads.py ./
+COPY tools ./tools
 
 RUN pip install -e ".[exports,llm]"
 

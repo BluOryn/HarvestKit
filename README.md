@@ -145,7 +145,7 @@ run:
   # ---- Identity ----
   user_agent: "HarvestKitBot/1.0 (+https://github.com/BluOryn/HarvestKit)"
   rotate_user_agents: true       # rotate Chrome/Firefox/Safari pool
-  obey_robots: false              # respect robots.txt; set true if required
+  obey_robots: true               # respect robots.txt (this is the default)
   confirm_permission: true        # required to run — acknowledge you have permission
 
   # ---- Pacing ----
@@ -268,8 +268,10 @@ work_authorization, visa_sponsorship, relocation, travel_required,
 recruiter_name, recruiter_title, recruiter_email, recruiter_phone, recruiter_linkedin,
 hiring_manager, hiring_manager_email, application_email, application_phone,
 apply_url, job_url, external_id, requisition_id,
-source_ats, source_domain, raw_jsonld, confidence, scraped_at, extras_json
+source_ats, source_domain, raw_jsonld, confidence, scraped_at
 ```
+
+The CSV wraps those 56 fields in an `id` column (the fingerprint) plus four book-keeping columns: `source, keywords_matched, saved_at, extras_json` — 61 columns in all.
 
 `extras_json` catches anything outside the schema fields — site-specific labels stash here automatically (e.g. `nav_arbeidstid`, `karrierestart_tiltredelse`).
 
