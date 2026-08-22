@@ -182,3 +182,28 @@ def test_names_are_split_for_downstream_use():
 
 def test_nameless_hits_are_skipped():
     assert build_leads(COMPANY, [PersonHit(name="", role="CTO")]) == []
+
+
+def test_a_shared_mailbox_on_the_page_is_not_the_persons_address():
+    """A site strategy attributes whatever single address it finds on the page.
+    "informatik.admin@" is a shared inbox, not the HR manager, and shipping it
+    as her personal address is the most visible quality failure there is."""
+    hits = [
+        PersonHit(
+            name="Romana Plaz",
+            role="HR Managerin",
+            email="informatik.admin@acme.de",
+            source_url="https://acme.de/team",
+        )
+    ]
+    lead = build_leads(COMPANY, hits, smtp=False)[0]
+    assert lead.person_email != "informatik.admin@acme.de"
+    assert lead.email_status != "published"
+
+
+def test_an_initials_mailbox_is_still_treated_as_theirs():
+    """ "rp@" at a small firm is Romana Plaz, not a shared inbox."""
+    hits = [PersonHit(name="Romana Plaz", role="HR", email="rp@acme.de", source_url="https://acme.de/team")]
+    lead = build_leads(COMPANY, hits, smtp=False)[0]
+    assert lead.person_email == "rp@acme.de"
+    assert lead.email_status == "published"

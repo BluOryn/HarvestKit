@@ -1,0 +1,29 @@
+# Swiss IT lead seed — jobs.ch.
+#
+# There are no `targets:` here on purpose. The whole seed is the jobs.ch filter
+# passed as --jobsch-url (the shipped default is the IT one), because that URL
+# carries the sector and the recency window server-side. Adding per-company ATS
+# targets would only dilute it with employers the filter did not choose.
+#
+#   python run_leads.py --config configs/leads/swiss-it.yaml \
+#       --jobsch-pages 40 --countries CH --target 100
+run:
+  confirm_permission: true
+  deep_scrape: false # the lead pipeline does its own per-company crawling
+  delay_seconds: 0.0 # per-host throttling does the pacing; hosts are all distinct
+  max_pages: 40
+  obey_robots: true
+  cache_enabled: true
+  cache_ttl_seconds: 604800 # a week — a re-run today must not refetch
+  rotate_user_agents: true
+  # jobs.ch is one host and serves the whole seed, so it gets a gentler budget
+  # than the thousands of distinct company domains crawled afterwards.
+  deep_per_host_concurrency: 2
+  deep_per_host_delay_seconds: 0.5
+
+targets: []
+
+exports:
+  csv:
+    enabled: true
+    path: "output/swiss-leads.csv"

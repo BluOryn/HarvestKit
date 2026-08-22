@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from leadgen.assemble import CompanyContext, build_leads
 from leadgen.person.hit import PersonHit
 from leadgen.person.name import looks_like_person_name, split_people, strip_leading_title
@@ -113,3 +115,27 @@ def test_selection_drops_a_fabricated_contact_already_in_the_checkpoint():
     selected, report = select(leads, target=10)
     assert [lead.person_name for lead in selected] == ["Anna Dahlfors"]
     assert report.dropped["not_a_person"] == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Fortschrittes Störungen",  # German abstract plurals, not a person
+        "Neue Möglichkeiten",
+        "Vertretungsberechtigte Person",  # an Impressum label, read off a heading
+        "Zufriedene Kunden",
+        "Aktuelle Themen",
+    ],
+)
+def test_german_page_furniture_is_not_a_person(text):
+    """Every German noun is capitalised, so shape alone cannot separate
+    "Störungen" from "Sägesser" — only vocabulary and word endings can."""
+    assert looks_like_person_name(text) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Adrian Thoma", "Marion Sägesser", "Patrick Schär", "Alex von Moos", "Colm Kelleher"],
+)
+def test_real_swiss_names_survive_the_furniture_filter(text):
+    assert looks_like_person_name(text) is True

@@ -16,8 +16,15 @@ HR_PATTERNS: list[str] = [
     r"people (?:operations|ops|team|partner|lead|manager|director)",
     r"talent(?: acquisition| partner| manager| lead)?",
     r"recruit\w*",
-    r"rekruter\w*",
+    # "Rekrutierung" is the ordinary Swiss/German word for the function and the
+    # old stem ("rekruter") could not match it.
+    r"rekrut\w*",
     r"personal(?:leiter|leiterin|wesen|abteilung|referent\w*|management|chef\w*)",
+    # German puts the noun either way round: "Personalleiterin" and "Leiterin
+    # Personal" are the same job, and only the first was being matched.
+    r"leiter(?:in)?\s+personal\w*",
+    r"leitung\s+personal\w*",
+    r"h\.?r\.?[-\s]?(?:leiter(?:in)?|verantwortlich\w*|business\s+partner\w*)",
     r"personnel",
     r"ressources humaines",
     r"risorse umane",
@@ -60,11 +67,18 @@ EXECUTIVE_PATTERNS: list[str] = [
     r"c\.?e\.?o\.?",
     r"c\.?o\.?o\.?",
     r"c\.?f\.?o\.?",
-    r"chief (?:executive|operating|financial|product|revenue|commercial) officer",
+    # Any C-level, not an enumerated few: "Chief Growth Officer" is as much an
+    # executive as a CFO and the closed list simply missed it.
+    r"chief\s+\w+(?:\s+\w+)?\s+officer",
     r"co[-\s]?founder",
     r"founder",
     r"gr[üu]nder(?:in)?",
     r"gesch[äa]ftsf[üu]hrer(?:in)?",
+    # The executive board itself, and membership of it.
+    r"(?:mitglied\s+(?:der\s+)?)?gesch[äa]ftsleitung",
+    r"generaldirektor(?:in)?",
+    r"niederlassungsleiter(?:in)?",
+    r"direction\s+g[ée]n[ée]rale",
     r"managing director",
     r"general manager",
     r"president",
@@ -74,6 +88,19 @@ EXECUTIVE_PATTERNS: list[str] = [
     r"directeur g[ée]n[ée]ral|direttore generale|director general",
     r"amministratore (?:unico|delegato)",
     r"g[ée]rant(?:e)?",
+    # How the Swiss commercial register names the same people. The register is
+    # the only source for companies that publish no staff at all, and without
+    # these its board and directors classified as "other" -- found, then cut.
+    r"(?:mitglied (?:des )?)?verwaltungsrat(?:e?s)?",
+    r"verwaltungsr[äa]t(?:in)?",
+    r"(?:vize)?pr[äa]sident(?:in)?",
+    r"(?:vize)?direktor(?:in)?",
+    r"administrateur(?:-d[ée]l[ée]gu[ée])?|administratrice",
+    r"conseil d'administration",
+    r"directeur|directrice",
+    r"consiglio d'amministrazione",
+    r"amministratore",
+    r"direttore",
 ]
 
 

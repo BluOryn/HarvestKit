@@ -77,6 +77,9 @@ def fetch(
     """Walk the feed politely. Never raises; a dead page ends the walk."""
     listings: list[JobListing] = []
     url = FEED_URL
+    # Counted rather than read off the loop variable: `max_pages=0` never enters
+    # the loop, and reading `page` afterwards raised UnboundLocalError.
+    page = 0
     for page in range(1, max_pages + 1):
         response = http.get(url)
         if not response:

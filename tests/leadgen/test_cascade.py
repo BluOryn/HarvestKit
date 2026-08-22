@@ -36,11 +36,35 @@ def test_cascade_visits_localised_paths_and_collects_people():
     assert {h.name for h in hits} == {"Anna Schmidt", "Peter Wolf"}
 
 
+def _guessed(calls):
+    """Guessed paths only: the homepage is nav discovery and sitemap URLs are
+    sitemap mining, and each of those has its own budget."""
+    return [c for c in calls if "sitemap" not in c and c != "https://acme.de/"]
+
+
 def test_max_pages_bounds_the_guessed_paths():
     http = StubHttp({})
     resolve_people("acme.de", "DE", http, max_pages=3, use_sitemap=False)
-    assert len(http.calls) == 3
+    assert len(_guessed(http.calls)) == 3
     assert all("sitemap" not in call for call in http.calls)
+
+
+def test_nav_discovery_reads_the_homepage_and_follows_what_it_links():
+    """A guessed path only finds a layout someone anticipated. deloitte.ch calls
+    its page "Our People" and aofoundation.org "AO Executive Committee"; the
+    site's own navigation is the only thing that knows that."""
+    home = '<html><body><a href="/en/governance">Leadership</a>' '<a href="/shop">Shop</a></body></html>'
+    http = StubHttp({"acme.de/": home, "/en/governance": TEAM})
+    hits = resolve_people("acme.de", "DE", http, max_pages=1, use_sitemap=False)
+    assert "https://acme.de/en/governance" in http.calls
+    assert {h.name for h in hits} == {"Anna Schmidt", "Peter Wolf"}
+    assert not any("/shop" in call for call in http.calls), "unrelated nav links are not followed"
+
+
+def test_nav_discovery_can_be_switched_off():
+    http = StubHttp({})
+    resolve_people("acme.de", "DE", http, max_pages=2, use_sitemap=False, max_nav_pages=0)
+    assert "https://acme.de/" not in http.calls
 
 
 def test_sitemap_mining_adds_probes_on_top_of_the_guessed_paths():
@@ -48,7 +72,7 @@ def test_sitemap_mining_adds_probes_on_top_of_the_guessed_paths():
     so they are budgeted separately rather than competing for the same slots."""
     http = StubHttp({})
     resolve_people("acme.de", "DE", http, max_pages=3, use_sitemap=True)
-    guessed = [call for call in http.calls if "sitemap" not in call]
+    guessed = _guessed(http.calls)
     probes = [call for call in http.calls if "sitemap" in call]
     assert len(guessed) == 3
     assert probes, "the sitemap index should have been probed"

@@ -77,17 +77,18 @@ def _urls_in(document: str) -> tuple[list[str], list[str]]:
         return [], []
     pages: list[str] = []
     nested: list[str] = []
+    # One pass to map every child to its parent. Re-scanning the whole tree per
+    # <loc> to find its parent is quadratic, and a 50k-URL sitemap is a real
+    # size — that walk took minutes and looked like a hung run.
+    parent_of = {child: parent for parent in root.iter() for child in parent}
     for element in root.iter():
         tag = element.tag.rsplit("}", 1)[-1]
         if tag != "loc" or not (element.text or "").strip():
             continue
         location = element.text.strip()
-        parent_tag = ""
         # A <loc> inside <sitemap> points at another index, not a page.
-        for candidate in root.iter():
-            if element in list(candidate):
-                parent_tag = candidate.tag.rsplit("}", 1)[-1]
-                break
+        parent = parent_of.get(element)
+        parent_tag = parent.tag.rsplit("}", 1)[-1] if parent is not None else ""
         (nested if parent_tag == "sitemap" else pages).append(location)
     return pages, nested
 

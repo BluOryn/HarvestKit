@@ -302,7 +302,7 @@ def test_personio_listings_resolve_to_a_german_country_code():
     companies = companies_from_listings(
         listings,
         StubHttp(reachable=("ottonova.de",)),
-        guess_domains=lambda slug, name="": [f"https://{slug}.de/"],
+        guess_domains=lambda slug, name="", country="": [f"https://{slug}.de/"],
     )
     assert companies and companies[0].country == "DE"
 
@@ -314,7 +314,7 @@ def test_the_board_slug_beats_the_legal_name_when_guessing_a_domain():
 
     seen = []
 
-    def guesser(slug, name=""):
+    def guesser(slug, name="", country=""):
         seen.append(slug)
         return [f"https://{slug}.de/"]
 

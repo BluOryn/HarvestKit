@@ -32,7 +32,11 @@ def test_every_shipped_job_config_loads():
     assert job_configs, "no configs found — did configs/ move?"
     for path in job_configs:
         config = load_config(str(path))
-        assert config.targets, f"{path} has no targets"
+        # A lead config may seed entirely from CLI flags (--jobsch-pages,
+        # --boards, --search-keywords), so `targets` is optional there. A
+        # scraper config with no targets scrapes nothing and is still a bug.
+        if "leads" not in path.parts:
+            assert config.targets, f"{path} has no targets"
         for target in config.targets:
             assert target.url.startswith("http"), f"{path}: {target.name} has a non-URL target"
 

@@ -50,8 +50,23 @@ _NOT_A_NAME: frozenset[str] = frozenset(
     beginning launches launch industry industries manufacturing logistics
     consulting training academy events webinar webinars ebook whitepaper
     pricing features integrations documentation roadmap changelog faq
+    kunden kunde themen thema angebot angebote partnerangebote leistungen
+    dienstleistungen produkte produkt loesungen referenzen standorte standort
+    aktuelles aktuelle neuigkeiten veranstaltungen termine geschichte zahlen
+    fakten werte jobangebote stellenangebote offene downloads formulare
+    rechtliches nutzungsbedingungen barrierefreiheit suche startseite
+    uebersicht mehr weiterlesen anmelden abmelden warenkorb merkzettel
+    zufriedene attraktive kostenlose individuelle professionelle erfahrene
+    vertretungsberechtigte vertretungsberechtigter vertretungsberechtigt
+    verantwortlich verantwortliche redaktion angaben gemaess handelsregister
+    mehrwertsteuer umsatzsteuer aufsichtsbehoerde sitz register rechtsform
     """.split()
 )
+
+# German abstract plurals — "Störungen", "Fortschritte", "Möglichkeiten" — are
+# capitalised like every German noun and read as surnames to any shape test.
+# No real surname takes these endings, so the suffix is a safe reject.
+_GERMAN_PLURAL_NOUN_RX = re.compile(r"(?:ungen|heiten|keiten|schaften|tionen)$", re.I)
 
 # The trailing dot matters: an academic title is part of how a German Impressum
 # writes a director's name ("Dr. Stefan Strobl"), and rejecting the token loses
@@ -120,6 +135,8 @@ def looks_like_person_name(name: str) -> bool:
     for token in tokens:
         bare = token.lower().strip(".,'’-")
         if bare in _NOT_A_NAME:
+            return False
+        if _GERMAN_PLURAL_NOUN_RX.search(bare):
             return False
         if bare in _PARTICLES:
             continue

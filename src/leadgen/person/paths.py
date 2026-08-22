@@ -23,7 +23,30 @@ UNIVERSAL: list[str] = [
 BY_COUNTRY: dict[str, list[str]] = {
     "DE": ["/impressum", "/ueber-uns", "/unternehmen", "/kontakt", "/karriere", "/das-team", "/team/"],
     "AT": ["/impressum", "/ueber-uns", "/unternehmen", "/kontakt"],
-    "CH": ["/impressum", "/ueber-uns", "/unternehmen", "/kontakt", "/a-propos"],
+    # Switzerland is trilingual and its companies name the executive board on a
+    # page of its own far more often than they use a German-style Impressum:
+    # "Geschäftsleitung" (executive management) and "Verwaltungsrat" (board) are
+    # the two pages that actually carry the C-suite.
+    "CH": [
+        "/impressum",
+        "/ueber-uns",
+        "/unternehmen",
+        "/kontakt",
+        "/geschaeftsleitung",
+        "/verwaltungsrat",
+        "/management",
+        "/team",
+        "/ueber-uns/team",
+        "/ueber-uns/management",
+        "/das-team",
+        "/mitarbeiter",
+        "/a-propos",
+        "/equipe",
+        "/notre-equipe",
+        "/direction",
+        "/chi-siamo",
+        "/il-team",
+    ],
     "FR": ["/mentions-legales", "/equipe", "/a-propos", "/notre-equipe", "/contact", "/qui-sommes-nous"],
     "IT": ["/note-legali", "/chi-siamo", "/il-team", "/contatti", "/azienda"],
     "ES": ["/aviso-legal", "/quienes-somos", "/equipo", "/nosotros", "/contacto"],

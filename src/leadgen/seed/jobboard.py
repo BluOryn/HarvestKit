@@ -49,6 +49,16 @@ IT_TITLE_PATTERNS: list[str] = [
     r"\bsap\b|salesforce|servicenow",
     r"mobile developer|ios developer|android developer",
     r"platform engineer|integration engineer|network engineer|netzwerk\w*",
+    # Swiss/German market vocabulary. "ICT" is the ordinary word for IT in
+    # Switzerland, and these titles were being dropped as non-IT: measured on a
+    # jobs.ch IT-category harvest the title gate rejected 41% of postings the
+    # source had already classified as IT.
+    r"ict|bi|business intelligence|data governance|data steward",
+    r"service ?desk|help ?desk|help point|supporter(?:in)?|anwendersupport",
+    r"sharepoint|m365|microsoft 365|office 365|copilot",
+    r"applikation\w*|application(?:s)? (?:support|manager|engineer|supporter)",
+    r"systemtechnik\w*|systemingenieur\w*|fachinformatik\w*",
+    r"digitalisierung|automation|robotics|embedded",
 ]
 IT_TITLE_RX = re.compile(r"(?:" + "|".join(IT_TITLE_PATTERNS) + r")", re.I)
 
@@ -98,6 +108,7 @@ def companies_from_listings(
     guess_domains=None,
     concurrency: int = 12,
     countries: frozenset[str] | None = None,
+    require_it_role: bool = True,
 ) -> list[CompanyContext]:
     """Collapse listings to unique companies with resolved domains.
 
@@ -131,9 +142,15 @@ def companies_from_listings(
         )
         return codes.most_common(1)[0][0] if codes else ""
 
+    # A seed whose query already fixed the sector — jobs.ch is searched by
+    # category — has nothing to gain from re-deciding it from the job title, and
+    # a title gate applied on top only throws away postings the source already
+    # classified correctly.
     grouped: dict[str, list] = {}
     for listing in listings:
-        if not looks_like_it_role(getattr(listing, "title", "")) or not _company_key(listing):
+        if require_it_role and not looks_like_it_role(getattr(listing, "title", "")):
+            continue
+        if not _company_key(listing):
             continue
         grouped.setdefault(_company_key(listing), []).append(listing)
 
@@ -156,7 +173,10 @@ def companies_from_listings(
                     hints.append(url)
 
         if guess_domains is not None:
-            hints.extend(guess_domains(_ats_slug(first) or first.company, first.company))
+            # Guesses go last and are ordered by the company's own market, so a
+            # real website supplied by the source always wins and a Swiss
+            # company is looked for on .ch before .com.
+            hints.extend(guess_domains(_ats_slug(first) or first.company, first.company, country_of(group)))
 
         domain = resolve_domain(first.company, hints, http)
         if not domain:

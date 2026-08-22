@@ -32,7 +32,49 @@ LEVER_URL = "https://api.lever.co/v0/postings/{slug}?mode=json"
 PERSONIO_URL = "https://{slug}.jobs.personio.de/search.json"
 
 # Ordered by how often they turn out to be right for EU tech companies.
-DOMAIN_TLDS = ("com", "de", "io", "co", "fr", "nl", "fi", "se", "eu", "ai", "es", "it", "pl")
+DOMAIN_TLDS = (
+    "com",
+    "de",
+    "ch",
+    "io",
+    "co",
+    "fr",
+    "nl",
+    "at",
+    "fi",
+    "se",
+    "eu",
+    "ai",
+    "es",
+    "it",
+    "pl",
+)
+
+#: The national TLD to try first when the company's country is known. A Swiss
+#: company is on .ch, and guessing .com first found someone else's site —
+#: "Empa" became empa.com, "Suva" became suva.de. A wrong domain is worse than
+#: no domain: it crawls a stranger and files the result under this company.
+COUNTRY_TLD: dict[str, str] = {
+    "CH": "ch",
+    "DE": "de",
+    "AT": "at",
+    "LI": "li",
+    "FR": "fr",
+    "IT": "it",
+    "NL": "nl",
+    "BE": "be",
+    "ES": "es",
+    "PT": "pt",
+    "PL": "pl",
+    "CZ": "cz",
+    "SE": "se",
+    "NO": "no",
+    "DK": "dk",
+    "FI": "fi",
+    "IE": "ie",
+    "GB": "co.uk",
+    "LU": "lu",
+}
 
 _TAG_RX = re.compile(r"<[^>]+>")
 _WS_RX = re.compile(r"\s+")
@@ -107,7 +149,7 @@ def _trading_name(company: str) -> str:
     return re.sub(r"\s+", " ", name).strip(" .,&-")
 
 
-def guess_domains(slug: str, company: str = "") -> list[str]:
+def guess_domains(slug: str, company: str = "", country: str = "") -> list[str]:
     """Candidate own-domains for a board slug, best guess first.
 
     Candidates are filtered by DNS before being returned. Most guesses are for
@@ -115,6 +157,10 @@ def guess_domains(slug: str, company: str = "") -> list[str]:
     costs a full connect timeout each — with a dozen TLDs per company that is
     minutes of dead waiting per board. A failed getaddrinfo costs milliseconds,
     and net_guard already caches the result.
+
+    `country` puts that market's TLD first. Without it a Swiss run resolved
+    "Empa" to empa.com and "Suva" to suva.de — real sites, wrong companies, and
+    the crawler then filed a stranger's staff under this employer.
     """
     stems: list[str] = []
     for raw in (slug, _trading_name(company), company):
@@ -125,9 +171,12 @@ def guess_domains(slug: str, company: str = "") -> list[str]:
             if variant and variant not in stems:
                 stems.append(variant)
 
+    national = COUNTRY_TLD.get((country or "").strip().upper(), "")
+    tlds = (national, *DOMAIN_TLDS) if national else DOMAIN_TLDS
+
     live: list[str] = []
     for stem in stems:
-        for tld in DOMAIN_TLDS:
+        for tld in dict.fromkeys(tlds):
             host = f"{stem}.{tld}"
             if _resolves_to_public(host):
                 live.append(f"https://{host}/")
