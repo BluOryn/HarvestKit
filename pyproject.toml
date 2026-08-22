@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "harvestkit"
 version = "0.1.0"
-description = "Universal job + business scraper. Python CLI engine + Chrome MV3 extension share a 60-field schema."
+description = "Universal job + business scraper. Python CLI engine + Chrome MV3 extension share a 56-field schema."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE" }
@@ -29,6 +29,8 @@ dependencies = [
     "lxml>=5.2.0",
     "PyYAML>=6.0.1",
     "defusedxml>=0.7.1",
+    # leadgen MX checks; without it every address is rejected for "no MX record".
+    "dnspython>=2.6.1",
     "tldextract>=5.1.2",
     "playwright>=1.45.0",
 ]

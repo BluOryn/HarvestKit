@@ -133,6 +133,11 @@ class EmailVerdict:
     status: str  # "ok" | "catch_all" | "unknown" | "rejected"
     reason: str = ""
 
+    # "ok" is a statement about the *domain*, not the address: the server
+    # rejected a random probe local-part, so it validates recipients rather than
+    # accepting everything. The address under test is never itself RCPT'd —
+    # doing so per address would be one SMTP session per lead.
+
 
 def is_role_account(email: str) -> bool:
     local = (email or "").strip().lower().partition("@")[0]
@@ -148,6 +153,20 @@ def is_role_account(email: str) -> bool:
 def valid_syntax(email: str) -> bool:
     value = (email or "").strip()
     return bool(value) and len(value) <= 254 and bool(_SYNTAX_RX.match(value))
+
+
+_warned_missing_resolver = False
+
+
+def _warn_missing_resolver() -> None:
+    global _warned_missing_resolver
+    if _warned_missing_resolver:
+        return
+    _warned_missing_resolver = True
+    log.error(
+        "dnspython is not installed, so no MX lookup can succeed and every "
+        "address will be rejected. Run: pip install -r requirements.txt"
+    )
 
 
 def _resolve(domain: str, record_type: str) -> list:
@@ -167,6 +186,12 @@ def has_mx(domain: str) -> bool:
         return False
     try:
         return bool(_resolve(domain, "MX"))
+    except ImportError:
+        # dnspython missing means *every* address is rejected for "no MX" and the
+        # run produces an empty list with no error. That is indistinguishable
+        # from a genuinely dead domain, so say it out loud, once.
+        _warn_missing_resolver()
+        return False
     except Exception:
         # No MX is common for parked or dead domains. Some domains accept mail on
         # their A record, but for prospecting a missing MX is a strong enough
