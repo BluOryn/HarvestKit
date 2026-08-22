@@ -163,12 +163,17 @@ class _ProxyPool:
         with self._lock:
             now = time.time()
             n = len(self.entries)
-            for _ in range(n):
-                if self.rotation == "random":
-                    idx = random.randrange(n)
-                else:
-                    idx = self._cursor % n
-                    self._cursor = (self._cursor + 1) % n
+            # Sample without replacement. Drawing a fresh random index each time
+            # could miss the one live proxy in a pool of dead ones (35% of the
+            # time with 10 entries) and silently fall back to a direct
+            # connection — the exact IP leak the warning below is about.
+            if self.rotation == "random":
+                order = random.sample(range(n), n)
+            else:
+                order = [(self._cursor + offset) % n for offset in range(n)]
+            for idx in order:
+                if self.rotation != "random":
+                    self._cursor = (idx + 1) % n
                 entry = self.entries[idx]
                 if entry["dead_until"] <= now:
                     entry["uses"] += 1
@@ -332,10 +337,16 @@ class HttpClient:
         proxy_rotation: str = "round_robin",
         proxy_max_failures: int = 3,
         proxy_cooldown_seconds: int = 300,
+        robots_exempt_hosts: tuple[str, ...] = (),
     ) -> None:
         self.user_agent = user_agent
         self.delay_seconds = max(0.0, delay_seconds)
         self.obey_robots = obey_robots
+        # Hosts whose robots.txt is not consulted because access was authorised
+        # out of band -- an API that issued us credentials. Deliberately an
+        # explicit per-host list rather than a global switch: a run that needs
+        # one credentialled API must not stop honouring robots everywhere else.
+        self.robots_exempt_hosts = frozenset(host.lower() for host in robots_exempt_hosts)
         self.timeout_seconds = timeout_seconds
         self.rotate_user_agents = rotate_user_agents
         self.ua_pool = DEFAULT_UA_POOL
@@ -418,6 +429,13 @@ class HttpClient:
         except ValueError:
             return "_"
 
+    def _robots_allow(self, url: str) -> bool:
+        if not self.obey_robots:
+            return True
+        if self._hostname(url).lower() in self.robots_exempt_hosts:
+            return True
+        return self._robots.is_allowed(url, self.user_agent)
+
     def _global_pace(self) -> None:
         with self._global_lock:
             elapsed = time.time() - self._last_request_at
@@ -475,7 +493,7 @@ class HttpClient:
         allow_404: bool = False,
         use_cache: bool = True,
     ) -> tuple[str, str] | None:
-        if self.obey_robots and not self._robots.is_allowed(url, self.user_agent):
+        if not self._robots_allow(url):
             logging.debug("robots disallow %s", url)
             return None
         if use_cache and self._cache is not None:
@@ -537,7 +555,11 @@ class HttpClient:
                 logging.debug("WAF/block at %s — signaling retry", url)
                 return None
             self._proxies.report_success(proxy_entry)
-            if self._cache is not None and use_cache:
+            # `allow_404` lets an error body reach the caller (probes read the
+            # body to tell "no such board" from "wrong host"). It must not also
+            # pin that error page in the cache for the whole TTL, which is how a
+            # transient 503 turned into a day of empty results.
+            if self._cache is not None and use_cache and response.status_code < 400:
                 self._cache.put(url, final_url, text)
             return final_url, text
         finally:
@@ -546,7 +568,7 @@ class HttpClient:
                 time.sleep(backoff_seconds)
 
     def head(self, url: str) -> int | None:
-        if self.obey_robots and not self._robots.is_allowed(url, self.user_agent):
+        if not self._robots_allow(url):
             logging.debug("robots disallow (HEAD) %s", url)
             return None
         host = self._hostname(url)
@@ -590,7 +612,7 @@ class HttpClient:
         headers: dict[str, str] | None = None,
     ) -> Any | None:
         """POST JSON. Not cached."""
-        if self.obey_robots and not self._robots.is_allowed(url, self.user_agent):
+        if not self._robots_allow(url):
             return None
         self._global_pace()
         host = self._hostname(url)
@@ -598,6 +620,9 @@ class HttpClient:
         proxy_url = (proxy_entry or {}).get("url", "")
         throttle_key = f"{host}|{proxy_url}"
         self._throttle.acquire(throttle_key)
+        # Same rule as `get`: a back-off is this caller's penalty, not a reason
+        # to hold a slot every other worker is queued on. Slept after release.
+        backoff_seconds = 0.0
         try:
             merged = {
                 "User-Agent": self._pick_ua(),
@@ -619,8 +644,9 @@ class HttpClient:
                 self._proxies.report_failure(proxy_entry)
                 return None
             if resp.status_code == 429:
+                backoff_seconds = _retry_after_seconds(resp.headers.get("Retry-After"))
+                logging.info("429 from %s — backing off %.1fs", url, backoff_seconds)
                 self._proxies.report_failure(proxy_entry)
-                time.sleep(min(_retry_after_seconds(resp.headers.get("Retry-After")), 30.0))
                 return None
             if resp.status_code >= 400:
                 if resp.status_code == 403:
@@ -633,3 +659,5 @@ class HttpClient:
                 return None
         finally:
             self._throttle.release(throttle_key)
+            if backoff_seconds > 0:
+                time.sleep(backoff_seconds)
