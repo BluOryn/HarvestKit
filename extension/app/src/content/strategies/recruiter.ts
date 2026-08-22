@@ -5,10 +5,25 @@ const RECRUITER_TITLE_RX = /(recruiter|talent\s+(?:acquisition|partner|manager)|
 const PERSON_NAME_RX = /\b([A-ZÄÖÜ][a-zäöüß]+(?:[\s-][A-ZÄÖÜ][a-zäöüß]+){1,3})\b/;
 const LINKEDIN_RX = /https?:\/\/(?:[a-z]+\.)?linkedin\.com\/in\/[A-Za-z0-9-_%]+/i;
 
+// A recruiter block links to a mailbox, a profile, maybe a phone. A site header
+// links to everything. jobs.ch's nav reads "… Salary estimator Recruiter Area
+// Deutsch Français English Login", which matched the recruiter-title regex and
+// then yielded "Area Deutsch" as the person — on every posting on the site.
+// Mirrors `_is_site_chrome()` in src/job_scraper/extract.py.
+const CHROME_LINK_DENSITY = 12;
+
+function isSiteChrome(el: Element): boolean {
+  if (el.closest("nav, header")) return true;
+  const role = (el.getAttribute("role") || "").toLowerCase();
+  if (["navigation", "banner", "menubar", "menu"].includes(role)) return true;
+  return el.querySelectorAll("a").length > CHROME_LINK_DENSITY;
+}
+
 export function fromRecruiter(root: Document = document): Partial<Job> {
   const job: Partial<Job> = {};
   const candidates = root.querySelectorAll("section, aside, footer, div, article");
   for (const el of Array.from(candidates)) {
+    if (isSiteChrome(el)) continue;
     const raw = ((el as any).innerText && (el as any).innerText.length > 0 ? (el as any).innerText : el.textContent) || "";
     const text = raw.slice(0, 1000);
     if (!RECRUITER_TITLE_RX.test(text)) continue;

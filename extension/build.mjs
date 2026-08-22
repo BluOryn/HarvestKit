@@ -31,23 +31,27 @@ const common = {
   define: { "process.env.NODE_ENV": '"production"' },
 };
 
+// `...common` goes FIRST in every target: spreading it last silently overrode
+// the per-target `format`, so the content script shipped as ESM. A content
+// script is injected as a classic script, so its top-level declarations landed
+// in the shared page-world scope instead of a closure.
 const targets = [
   {
+    ...common,
     entryPoints: ["app/src/content/inject.tsx"],
     outfile: "dist/content.js",
     format: "iife",
-    ...common,
   },
   {
+    ...common,
     entryPoints: ["app/src/background/main.ts"],
     outfile: "dist/background.js",
-    ...common,
   },
   {
+    ...common,
     entryPoints: ["app/src/sidepanel/main.tsx"],
     outfile: "dist/sidepanel.js",
     format: "esm",
-    ...common,
   },
 ];
 

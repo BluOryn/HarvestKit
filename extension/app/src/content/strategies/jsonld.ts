@@ -20,6 +20,25 @@ const EDUCATION_RX_LOCAL = /\b(Bachelor(?:'?s)?|Master(?:'?s)?|M\.?Sc\.?|M\.?Eng
 const EXPERIENCE_RX_LOCAL = /(\d+)\s?\+?\s?(?:-\s?\d+\s?)?(?:years?|jahre?n?|jahresberufserfahrung|ans|anni)\b/i;
 const HIRING_MANAGER_RX_LOCAL = /\b(?:hiring\s+manager|reports?\s+to|berichtet\s+an|vorgesetzt|line\s+manager|direct\s+supervisor|supervisor)\s*[:\-]?\s*([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+){1,3})/i;
 
+/**
+ * Flatten a Schema.org value that may be a string, a list, or a typed node such
+ * as `CategoryCode`. jobs.ch sends `occupationalCategory` as a CategoryCode
+ * object, and stringifying it put "[object Object]" in the department column.
+ * Mirrors `_named()` in src/job_scraper/extract.py.
+ */
+function named(value: any): string {
+  if (value == null) return "";
+  if (Array.isArray(value)) return value.map(named).filter(Boolean).join(", ");
+  if (typeof value === "object") {
+    for (const key of ["name", "title", "value", "codeValue", "termCode"]) {
+      const found = value[key];
+      if (typeof found === "string" && found.trim()) return found.trim();
+    }
+    return "";
+  }
+  return clean(value);
+}
+
 function parseDescriptionHtml(html: string): {
   responsibilities?: string;
   requirements?: string;
@@ -189,7 +208,13 @@ export function fromJsonLd(item: any): Partial<Job> | null {
 
   const locType = item.jobLocationType;
   if (locType && /TELECOMMUTE|REMOTE/i.test(JSON.stringify(locType))) job.remote_type = "remote";
-  else if (item.applicantLocationRequirements) job.remote_type = "remote";
+  else if (item.applicantLocationRequirements && locStrs.length === 0) {
+    // `applicantLocationRequirements` says where an applicant may *live*, not
+    // that the role is remote. jobs.ch stamps "Country: Switzerland" on every
+    // posting, so keying off its presence marked 100% of them remote — street
+    // address and all. Mirrors src/job_scraper/extract.py.
+    job.remote_type = "remote";
+  }
 
   job.employment_type = clean(Array.isArray(item.employmentType) ? item.employmentType.join(", ") : item.employmentType);
   job.posted_date = clean(item.datePosted);
@@ -245,12 +270,10 @@ export function fromJsonLd(item: any): Partial<Job> | null {
   job.apply_url = clean(applyHref || item.url);
   job.job_url = clean(item.url);
   // Schema.org: occupationalCategory = job function, industry = employer's sector.
-  if (item.occupationalCategory) {
-    job.department = clean(Array.isArray(item.occupationalCategory) ? item.occupationalCategory.join(", ") : item.occupationalCategory);
-  }
-  if (item.industry) {
-    job.company_industry = clean(Array.isArray(item.industry) ? item.industry.join(", ") : item.industry);
-  }
+  const occupational = named(item.occupationalCategory);
+  if (occupational) job.department = occupational;
+  const industry = named(item.industry);
+  if (industry) job.company_industry = industry;
   job.raw_jsonld = JSON.stringify(item).slice(0, 8000);
   return job;
 }

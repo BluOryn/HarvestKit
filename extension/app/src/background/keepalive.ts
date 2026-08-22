@@ -13,7 +13,8 @@
  */
 
 const ALARM_NAME = "jh-keepalive";
-// Chrome clamps alarm periods to a 1-minute floor for unpacked extensions.
+// Chrome clamps `periodInMinutes` to a 30-second floor, so this is the shortest
+// period that is honoured rather than silently rounded up.
 const ALARM_PERIOD_MINUTES = 0.5;
 // Any extension-API round trip resets the 30 s idle timer.
 const PING_INTERVAL_MS = 20_000;

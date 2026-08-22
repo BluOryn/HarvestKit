@@ -2,7 +2,17 @@ import React, { useMemo, useState, useEffect } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
 import { db } from "../lib/db";
 import { useUI } from "../stores/ui";
-import { Send, MousePointerClick, Sparkles, Flame, Zap, Info } from "lucide-react";
+import { Send, MousePointerClick, Sparkles, Flame, Info } from "lucide-react";
+
+/** Hostname of a tab URL, or "". `new URL("")` throws, and a tab with no URL
+ *  (chrome://, still loading) used to reject the whole save. */
+function hostnameOf(url: string | undefined): string {
+  try {
+    return new URL(url || "").hostname;
+  } catch {
+    return "";
+  }
+}
 
 export function Dashboard() {
   const jobs = useLiveQuery(() => db.jobs.toArray(), [], []);
@@ -62,7 +72,7 @@ export function Dashboard() {
       await chrome.runtime.sendMessage({
         type: "SAVE_LIST",
         cards: list.cards,
-        source_domain: tab && new URL(tab.url || "").hostname,
+        source_domain: hostnameOf(tab?.url),
         source_url: tab?.url,
       });
       toast(`No single posting; saved ${list.cards.length} list cards instead.`, "green");
@@ -78,7 +88,7 @@ export function Dashboard() {
     await chrome.runtime.sendMessage({
       type: "SAVE_LIST",
       cards: list.cards,
-      source_domain: tab && new URL(tab.url || "").hostname,
+      source_domain: hostnameOf(tab?.url),
       source_url: tab?.url,
     });
     toast(`Saved ${list.cards.length} card snapshots.`, "green");

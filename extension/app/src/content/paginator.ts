@@ -29,7 +29,11 @@ export function detectPagination(root: Document = document): { type: PaginationT
   if (adapter?.nextPage) {
     const nextUrl = adapter.nextPage(root);
     if (nextUrl) {
-      const el = root.querySelector(`a[href="${nextUrl}"], a[href$="${new URL(nextUrl).pathname}"]`) as HTMLElement | null;
+      // Matched by comparing resolved hrefs rather than by interpolating the
+      // URL into an attribute selector: a relative href made `new URL(nextUrl)`
+      // throw and a URL containing a quote made the selector invalid, and
+      // either one escaped detectPagination() and aborted the whole list flow.
+      const el = findAnchorFor(root, nextUrl);
       return { type: "next-button", element: el || findNextButton(root), hasMore: true };
     }
   }
@@ -43,6 +47,31 @@ export function detectPagination(root: Document = document): { type: PaginationT
   if (detectInfiniteScroll(root)) return { type: "infinite-scroll", element: null, hasMore: true };
 
   return { type: "none", element: null, hasMore: false };
+}
+
+/** The anchor whose resolved href is `target`, or whose path matches it. */
+function findAnchorFor(root: Document, target: string): HTMLElement | null {
+  let resolved = "";
+  let path = "";
+  try {
+    const url = new URL(target, location.href);
+    resolved = url.href;
+    path = url.pathname;
+  } catch {
+    return null;
+  }
+  let byPath: HTMLElement | null = null;
+  for (const a of Array.from(root.querySelectorAll("a[href]")) as HTMLAnchorElement[]) {
+    let href: URL;
+    try {
+      href = new URL(a.getAttribute("href") || "", location.href);
+    } catch {
+      continue;
+    }
+    if (href.href === resolved) return a;
+    if (!byPath && path && href.pathname === path) byPath = a;
+  }
+  return byPath;
 }
 
 function findNextButton(root: Document): HTMLElement | null {

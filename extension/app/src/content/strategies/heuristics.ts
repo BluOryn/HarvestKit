@@ -1,9 +1,13 @@
 import { clean, getText, uniq } from "../../lib/utils";
 import type { Job } from "../../lib/schema";
 
+// Bare "go" and "node" are deliberately absent, matching TECH_DICT in
+// src/job_scraper/extract.py: the term test is a word-boundary match, so they
+// fire on ordinary prose ("can go the extra mile") and tagged the posting with
+// a stack it never mentioned. "golang" and "node.js" still catch the real ones.
 const TECH_DICT = [
-  "python","java","kotlin","scala","golang","go","rust","c++","c#","typescript","javascript",
-  "react","vue","angular","svelte","next.js","nuxt","node.js","node","express","fastapi","django","flask","spring","spring boot",
+  "python","java","kotlin","scala","golang","rust","c++","c#","typescript","javascript",
+  "react","vue","angular","svelte","next.js","nuxt","node.js","express","fastapi","django","flask","spring","spring boot",
   "aws","gcp","azure","kubernetes","k8s","docker","terraform","ansible","helm","istio",
   "postgres","postgresql","mysql","mongodb","redis","elasticsearch","clickhouse","snowflake","bigquery","redshift","databricks",
   "kafka","rabbitmq","spark","airflow","dbt","flink","hadoop",
@@ -44,8 +48,21 @@ const EDUCATION_RX = /\b(Bachelor(?:'?s)?|Master(?:'?s)?|M\.?Sc\.?|M\.?Eng\.?|M\
 const EXPERIENCE_RX = /(\d+)\s?\+?\s?(?:-\s?\d+\s?)?(?:years?|jahre?n?|jahresberufserfahrung|ans|anni)\b/i;
 const HIRING_MANAGER_RX = /\b(?:hiring\s+manager|reports?\s+to|berichtet\s+an|vorgesetzt|line\s+manager|direct\s+supervisor|supervisor)\s*[:\-]?\s*([A-ZÄÖÜ][a-zäöüß]+(?:\s+[A-ZÄÖÜ][a-zäöüß]+){1,3})/i;
 
-export function fromHeuristics(root: Document = document): Partial<Job> {
-  const text = (getText(root.body) || "").slice(0, 200000);
+// Above this a structured description is the whole job body, so the heuristics
+// scan it alone instead of the surrounding page. A job board renders "similar
+// jobs" cards from *other* employers on every detail page: measured on jobs.ch
+// a mechanical-engineering role came out tagged "devsecops" from a neighbouring
+// card, and every posting whose sidebar said Homeoffice came out remote.
+// Mirrors SELF_CONTAINED_DESCRIPTION_CHARS in src/job_scraper/extract.py.
+const SELF_CONTAINED_DESCRIPTION_CHARS = 400;
+
+export function fromHeuristics(root: Document = document, description = ""): Partial<Job> {
+  const pageText = getText(root.body) || "";
+  const text = (
+    description.length >= SELF_CONTAINED_DESCRIPTION_CHARS ? description : `${pageText} ${description}`
+  )
+    .trim()
+    .slice(0, 200000);
   const job: Partial<Job> = {};
 
   const lower = text.toLowerCase();

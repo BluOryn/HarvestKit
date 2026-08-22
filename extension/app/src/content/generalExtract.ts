@@ -9,7 +9,7 @@
  * Strategy stack: JSON-LD LocalBusiness/Restaurant/Place → microdata → OpenGraph →
  * heuristics. Same merge-longer-string-wins logic as the job extractor.
  */
-import { emptyRecord, mergeRecords, fingerprintRecord, type GeneralRecord, GENERAL_FIELDS } from "../lib/generalSchema";
+import { emptyRecord, mergeRecords, fingerprintRecord, type GeneralRecord } from "../lib/generalSchema";
 import { clean, flatten, safeJSON } from "../lib/utils";
 import { pickGeneralSite, universalCardExtract, type GeneralCard } from "./generalSites";
 
@@ -287,7 +287,15 @@ export function extractGeneralCards(): GeneralCard[] {
     const phone = c.querySelector("[class*='phone'], [class*='Phone'], [class*='tel']");
     if (!addr && !phone) continue;
     const a = c.querySelector("a[href]") as HTMLAnchorElement | null;
-    const url = a ? new URL(a.getAttribute("href") || "", location.href).href : "";
+    // A malformed href here used to throw and abandon every remaining card.
+    let url = "";
+    if (a) {
+      try {
+        url = new URL(a.getAttribute("href") || "", location.href).href;
+      } catch {
+        continue;
+      }
+    }
     if (!url || seen.has(url)) continue;
     seen.add(url);
     out.push({

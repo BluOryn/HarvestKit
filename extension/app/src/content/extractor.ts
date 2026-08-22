@@ -112,7 +112,15 @@ export function extract(): { job: Job | null; detection: ReturnType<typeof detec
   for (const ld of det.jsonld || []) if (isJobPosting(ld)) parts.push(fromJsonLd(ld));
   parts.push(fromMicrodata(document));
   parts.push(fromOpenGraph(document));
-  parts.push(fromHeuristics(document));
+  // The structured description, when the posting carries one, is the job body.
+  // Handing it to the heuristics keeps them off the "similar jobs" sidebar,
+  // whose cards belong to other employers entirely.
+  const structuredDescription = parts.reduce(
+    (longest: string, part: any) =>
+      part?.description && part.description.length > longest.length ? part.description : longest,
+    "",
+  );
+  parts.push(fromHeuristics(document, structuredDescription));
   parts.push(fromRecruiter(document));
 
   const job = mergeJobs([emptyJob(), ...parts.filter(Boolean)]);

@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { LayoutDashboard, Database, Activity, Settings as Cog, ChevronDown, Search, Sparkles } from "lucide-react";
+import { LayoutDashboard, Database, Activity, Settings as Cog } from "lucide-react";
 import { useUI } from "../stores/ui";
 import { Dashboard } from "../views/Dashboard";
 import { Library } from "../views/Library";

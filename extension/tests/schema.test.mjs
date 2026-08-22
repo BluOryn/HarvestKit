@@ -16,6 +16,20 @@ import { build } from "esbuild";
 const outDir = mkdtempSync(join(tmpdir(), "jh-test-"));
 after(() => rmSync(outDir, { recursive: true, force: true }));
 
+/** Point the content script's globals at `dom`. Both DOM suites below call
+ *  this inside their own tests: `describe` bodies all run before any `it`, so
+ *  installing a DOM at describe time let the last suite loaded win and the
+ *  other suite then extracted from the wrong document. */
+function installDom(dom) {
+  globalThis.window = dom.window;
+  globalThis.document = dom.window.document;
+  globalThis.location = dom.window.location;
+  globalThis.Element = dom.window.Element;
+  globalThis.HTMLElement = dom.window.HTMLElement;
+  globalThis.Node = dom.window.Node;
+  globalThis.URL = dom.window.URL;
+}
+
 async function load(entry) {
   const outfile = join(outDir, `${entry.replace(/\W/g, "_")}.mjs`);
   await build({
@@ -153,10 +167,13 @@ describe("csv export", async () => {
   });
 });
 
+
 describe("job extraction", async () => {
   const { JSDOM } = await import("jsdom");
-  const dom = new JSDOM(
-    `<!doctype html><html><head>
+  const { extract } = await load("content/extractor.ts");
+  const dom = () =>
+    new JSDOM(
+      `<!doctype html><html><head>
      <title>Senior Backend Engineer — Acme GmbH</title>
      <link rel="canonical" href="https://acme.test/jobs/senior-backend"/>
      <script type="application/ld+json">
@@ -172,21 +189,11 @@ describe("job extraction", async () => {
      <p>We use Python and Kubernetes. Apply now.</p>
      <a href="https://boards.greenhouse.io/acme/jobs/7">Apply now</a>
      </main></body></html>`,
-    { url: "https://acme.test/jobs/senior-backend" },
-  );
-
-  // The content script reads these off globalThis.
-  globalThis.window = dom.window;
-  globalThis.document = dom.window.document;
-  globalThis.location = dom.window.location;
-  globalThis.Element = dom.window.Element;
-  globalThis.HTMLElement = dom.window.HTMLElement;
-  globalThis.Node = dom.window.Node;
-  globalThis.URL = dom.window.URL;
-
-  const { extract } = await load("content/extractor.ts");
+      { url: "https://acme.test/jobs/senior-backend" },
+    );
 
   it("pulls the core fields out of JSON-LD", () => {
+    installDom(dom());
     const { job, detection } = extract();
     assert.ok(detection.isJob, "page should be detected as a job");
     assert.equal(job.title, "Senior Backend Engineer");
@@ -197,7 +204,75 @@ describe("job extraction", async () => {
   });
 
   it("prefers the external ATS as the apply URL", () => {
+    installDom(dom());
     const { job } = extract();
     assert.match(job.apply_url, /greenhouse\.io/);
+  });
+});
+
+describe("jobs.ch parity with the Python engine", async () => {
+  const { JSDOM } = await import("jsdom");
+  const { extract } = await load("content/extractor.ts");
+
+  // Shaped like a live jobs.ch detail page: a full JSON-LD body, a nav bar
+  // whose links include the word "Recruiter", and a "similar jobs" rail
+  // advertising a *different* employer's role.
+  const posting = {
+    "@context": "https://schema.org",
+    "@type": "JobPosting",
+    title: "Senior Model-Based System Engineer",
+    description:
+      "<p>" +
+      "At Belimo we build actuators and sensors for heating and ventilation. ".repeat(8) +
+      "You will own the model-based systems engineering toolchain end to end.</p>",
+    hiringOrganization: { "@type": "Organization", name: "BELIMO Automation AG" },
+    applicantLocationRequirements: { "@type": "Country", name: "Switzerland" },
+    jobLocation: {
+      "@type": "Place",
+      address: { "@type": "PostalAddress", addressRegion: "Hinwil", postalCode: "8340", addressCountry: "CH" },
+    },
+    occupationalCategory: { "@type": "CategoryCode", codeValue: "98", name: "Technical / Electronics" },
+    industry: "Industry various",
+    employmentType: "Permanent position",
+  };
+  const dom = () =>
+    new JSDOM(
+      `<!doctype html><html><head>
+     <script type="application/ld+json">${JSON.stringify(posting)}</script></head>
+     <body>
+       <nav><a href="/1">Find a job</a><a href="/2">Explore companies</a><a href="/3">Salary estimator</a>
+         <a href="/4">Recruiter</a><a href="/5">Area</a><a href="/6">Deutsch</a><a href="/7">Français</a>
+         <a href="/8">English</a><a href="/9">Login</a><a href="/10">a</a><a href="/11">b</a>
+         <a href="/12">c</a><a href="/13">d</a><a href="/14">e</a></nav>
+       <main><h1>Senior Model-Based System Engineer</h1></main>
+       <aside><h2>Similar jobs</h2>
+         <p>DevSecOps Engineer (alle) — LEGIC Identsystems AG — Wallisellen — Homeoffice</p></aside>
+     </body></html>`,
+      { url: "https://www.jobs.ch/en/vacancies/detail/5b141452-d08d-4edc-964b-da7bfdb1df66/" },
+    );
+
+  it("does not call a job remote just because applicants must live in Switzerland", () => {
+    installDom(dom());
+    assert.equal(extract().job.remote_type, "");
+  });
+
+  it("reads a CategoryCode department as its name, not as [object Object]", () => {
+    installDom(dom());
+    const { job } = extract();
+    assert.equal(job.department, "Technical / Electronics");
+    assert.equal(job.company_industry, "Industry various");
+  });
+
+  it("does not mine a recruiter out of the site navigation", () => {
+    installDom(dom());
+    const { job } = extract();
+    assert.equal(job.recruiter_name, "");
+    assert.equal(job.recruiter_title, "");
+  });
+
+  it("does not attribute a neighbouring employer's tech stack to this posting", () => {
+    installDom(dom());
+    const { job } = extract();
+    assert.ok(!/devsecops/i.test(job.tech_stack), `tech_stack leaked: ${job.tech_stack}`);
   });
 });
