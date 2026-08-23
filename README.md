@@ -375,6 +375,10 @@ npm run watch              # rebuild on change; then hit reload on chrome://exte
 
 ---
 
-## License
+## Licence
 
-MIT — see [LICENSE](LICENSE).
+Proprietary — see [LICENSE](LICENSE). This is not open-source software. Access
+is granted per person, is revocable, and does not include the right to copy,
+publish, or reuse it. Anyone running it should read
+[docs/OPERATOR-TERMS.md](docs/OPERATOR-TERMS.md) first: the lead lists it
+produces are personal data and are not the operator's to keep or forward.
