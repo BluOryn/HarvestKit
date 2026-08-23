@@ -1,21 +1,61 @@
-MIT License
+HarvestKit — Proprietary Software Licence
 
-Copyright (c) 2026 BluOryn
+Copyright (c) 2026 BluOryn. All rights reserved.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+This software and its documentation ("the Software") are the confidential and
+proprietary property of BluOryn. They are licensed, not sold.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. GRANT
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+   BluOryn grants each person it authorises in writing ("you") a personal,
+   non-exclusive, non-transferable, revocable licence to install and run the
+   Software on machines you control, solely to perform work for BluOryn or at
+   BluOryn's direction.
+
+2. RESTRICTIONS
+
+   You may not, without BluOryn's prior written permission:
+
+   a. copy, publish, distribute, sublicense, sell, rent, or lend the Software
+      or any part of it, to anyone;
+   b. use the Software for your own business, for a third party, or for any
+      purpose other than the work BluOryn authorised;
+   c. create derivative works from the Software, or incorporate any part of it
+      into other software;
+   d. reverse engineer, decompile, or disassemble the Software, except where
+      that right cannot lawfully be excluded;
+   e. remove or alter this notice or any other proprietary marking.
+
+3. OUTPUT AND DATA
+
+   Lead lists, CSV exports, checkpoint databases and every other output the
+   Software produces belong to BluOryn. They contain personal data, and you
+   process that data only on BluOryn's documented instructions.
+
+   You must not retain, copy, publish, sell, or disclose any output to any
+   third party, and you must delete every local copy when your authorisation
+   ends or when BluOryn asks.
+
+   See docs/OPERATOR-TERMS.md for what those instructions are in practice.
+
+4. TERMINATION
+
+   This licence ends immediately if you breach any term, and BluOryn may
+   revoke it at any time for any reason. On termination you must stop using
+   the Software and delete all copies of it and of its output.
+
+5. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
+   BLUORYN BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+   WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+6. THIRD-PARTY COMPONENTS
+
+   The Software depends on third-party open-source packages, each governed by
+   its own licence. Nothing here alters those licences or your rights in them.
+
+Questions: hriday.vig@bluoryn.com

@@ -93,4 +93,6 @@ We will not accept PRs that:
 
 ## License
 
-By contributing you agree your code is released under the [MIT License](LICENSE).
+By contributing you assign your contribution to BluOryn, to be licensed under
+the repository's [proprietary licence](LICENSE). This is not open-source
+software; do not copy it, publish it, or reuse it elsewhere.

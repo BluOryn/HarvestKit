@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/BluOryn/HarvestKit/actions/workflows/ci.yml/badge.svg)](https://github.com/BluOryn/HarvestKit/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/BluOryn/HarvestKit/actions/workflows/codeql.yml/badge.svg)](https://github.com/BluOryn/HarvestKit/actions/workflows/codeql.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Licence: Proprietary](https://img.shields.io/badge/licence-proprietary-red.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-green.svg)](https://developer.chrome.com/docs/extensions/mv3/intro/)
 

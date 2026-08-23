@@ -7,6 +7,10 @@ yesterday's.
 This document is the whole job. If something in it is wrong, the document is
 wrong — say so rather than working around it.
 
+**Read [OPERATOR-TERMS.md](OPERATOR-TERMS.md) first.** It is two pages and it
+covers what you may and may not do with the lists, which matters because every
+row is a real person's data and it is not yours to keep or forward.
+
 ---
 
 ## Day one: setup (about 10 minutes)
