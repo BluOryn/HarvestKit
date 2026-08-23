@@ -22,6 +22,9 @@ env/
 
 # Output (CSVs are runs, not source)
 output/
+# Run logs. `*.log` below covers the files, but the directory is named here too
+# so anything else a runner drops in it stays out of git as well.
+logs/
 
 # Node / extension
 node_modules/
