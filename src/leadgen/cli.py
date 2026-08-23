@@ -20,7 +20,9 @@ from .score.quota import select
 from .seed.arbeitnow import fetch as fetch_arbeitnow
 from .seed.atsboards import fetch_boards, guess_domains
 from .seed.jobboard import companies_from_listings
-from .seed.jobsch import DEFAULT_FILTER_URL as JOBSCH_FILTER_URL
+from .seed.jobsch import DEFAULT_DAYS as JOBSCH_DEFAULT_DAYS
+from .seed.jobsch import IT_CATEGORIES as JOBSCH_IT_CATEGORIES
+from .seed.jobsch import build_filter_url as build_jobsch_url
 from .seed.jobsch import fetch as fetch_jobsch
 from .seed.jobsearch import search_all
 
@@ -80,6 +82,12 @@ def _collect_listings(config, http) -> list:
         except Exception as exc:
             log.warning("seed: %s failed: %s", target.name, exc)
     return listings
+
+
+def _int_list(spec: str, fallback: tuple[int, ...]) -> tuple[int, ...]:
+    """Parse "106,146" into ids, keeping the shipped set when nothing parses."""
+    found = tuple(int(part) for part in (spec or "").split(",") if part.strip().isdigit())
+    return found or fallback
 
 
 def _country_set(spec: str) -> frozenset[str] | None:
@@ -151,10 +159,32 @@ def build_parser() -> argparse.ArgumentParser:
         "which skips domain resolution entirely",
     )
     parser.add_argument(
+        "--jobsch-days",
+        type=int,
+        default=JOBSCH_DEFAULT_DAYS,
+        help="how recently a posting must have appeared, in days. Measured live against "
+        "the shipped sector filter: 1 day returns 25 postings, 3 returns 185, 7 returns "
+        "478, 30 returns 1396. After the first sweep a daily run only needs the last few "
+        "days; asking for 30 every morning re-fetches postings whose employers are "
+        "already crawled",
+    )
+    parser.add_argument(
+        "--jobsch-term",
+        default="",
+        help="free-text keyword added to the jobs.ch filter (empty = the whole sector)",
+    )
+    parser.add_argument(
+        "--jobsch-categories",
+        default=",".join(str(c) for c in JOBSCH_IT_CATEGORIES),
+        help="jobs.ch category ids, comma separated. Shipped: 106 IT/Telecom, "
+        "146 Engineering/Technical, 156 Management/Consulting, 167 Electronics",
+    )
+    parser.add_argument(
         "--jobsch-url",
-        default=JOBSCH_FILTER_URL,
-        help="jobs.ch search URL whose filter defines the sector and recency window. "
-        "Defaults to the shipped IT filter (4 categories, 4 employment types, 30 days)",
+        default="",
+        help="a complete jobs.ch search URL, which overrides --jobsch-days/-term/"
+        "-categories entirely. Build the search you want in a browser and paste the "
+        "address bar",
     )
     parser.add_argument("--target", type=int, default=1000, help="exact number of rows wanted")
     parser.add_argument("--output", default="output/leads.csv")
@@ -266,9 +296,18 @@ def main(argv: list[str] | None = None) -> int:
                     listings.extend(fetch_boards(boards, http))
                 jobsch_listings: list = []
                 if args.jobsch_pages:
+                    # An explicit URL is taken whole: somebody who pasted a search
+                    # out of their browser means that search, not that search with
+                    # our defaults grafted back on.
+                    filter_url = args.jobsch_url or build_jobsch_url(
+                        days=args.jobsch_days,
+                        categories=_int_list(args.jobsch_categories, JOBSCH_IT_CATEGORIES),
+                        term=args.jobsch_term,
+                    )
+                    log.info("seed: jobs.ch filter %s", filter_url)
                     jobsch_listings = fetch_jobsch(
                         http,
-                        filter_url=args.jobsch_url,
+                        filter_url=filter_url,
                         max_pages=args.jobsch_pages,
                         concurrency=args.concurrency,
                     )

@@ -27,6 +27,7 @@ import json
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote_plus
 
 from bs4 import BeautifulSoup
 
@@ -47,6 +48,40 @@ DEFAULT_FILTER_URL = (
     "&employment-type=1&employment-type=2&employment-type=4&employment-type=5"
     "&publication-date=30&term="
 )
+
+#: jobs.ch's own taxonomy ids for the sectors the shipped filter selects.
+IT_CATEGORIES = (106, 146, 156, 167)
+
+#: Permanent and fixed-term staff contracts. Apprenticeships (3) and internships
+#: (6) are deliberately absent: they have no budget and no hiring authority.
+STAFF_EMPLOYMENT_TYPES = (1, 2, 4, 5)
+
+#: Default recency window, in days.
+DEFAULT_DAYS = 30
+
+
+def build_filter_url(
+    *,
+    days: int = DEFAULT_DAYS,
+    categories: tuple[int, ...] = IT_CATEGORIES,
+    employment_types: tuple[int, ...] = STAFF_EMPLOYMENT_TYPES,
+    term: str = "",
+) -> str:
+    """A jobs.ch search URL. The filter is the targeting, so this is the knob.
+
+    `days` is the one that matters day to day. Measured against the live board
+    with the shipped sector filter: 1 day returns 25 postings, 3 returns 185,
+    7 returns 478, 30 returns 1,396. A daily run that keeps asking for 30 days
+    re-fetches thirteen hundred postings to discover employers it already
+    crawled; asking for 3 covers everything posted since yesterday at an eighth
+    of the requests.
+    """
+    parts = [f"category={cat}" for cat in categories]
+    parts += [f"employment-type={kind}" for kind in employment_types]
+    parts.append(f"publication-date={max(1, int(days))}")
+    parts.append(f"term={quote_plus(term.strip())}")
+    return "https://www.jobs.ch/en/vacancies/?" + "&".join(parts)
+
 
 DETAIL_RX = re.compile(r"/(?:en|de|fr|it)/(?:vacancies|stellenangebote|offres-emplois)/detail/([\w\-]{36})")
 _RESULT_COUNT_RX = re.compile(r"([\d'’,\.]+)\s*(?:jobs|Jobs|Stellen|emplois)")

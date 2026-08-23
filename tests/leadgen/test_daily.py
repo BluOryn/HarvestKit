@@ -116,3 +116,61 @@ def test_a_recrawl_does_not_resend_the_people_it_already_sent(checkpoint):
     already = checkpoint.delivered_ids()
     remaining = [lead for lead in checkpoint.all_leads() if lead.fingerprint() not in already]
     assert [lead.person_name for lead in remaining] == ["Reto Conrad"]
+
+
+# --------------------------------------------------------------------------
+# The jobs.ch filter is the targeting. Everything the operator can aim lives
+# in this URL, so building it wrong aims the whole run somewhere else.
+# --------------------------------------------------------------------------
+
+
+def test_the_builder_reproduces_the_shipped_filter_exactly():
+    """The shipped constant is what every measured number in the runbook was
+    taken against. If the builder drifts from it, those numbers stop meaning
+    anything."""
+    from leadgen.seed.jobsch import DEFAULT_FILTER_URL, build_filter_url
+
+    assert build_filter_url() == DEFAULT_FILTER_URL
+
+
+@pytest.mark.parametrize("days, expected", [(1, 1), (3, 3), (30, 30), (0, 1), (-5, 1)])
+def test_the_recency_window_is_always_at_least_a_day(days, expected):
+    from leadgen.seed.jobsch import build_filter_url
+
+    assert f"publication-date={expected}" in build_filter_url(days=days)
+
+
+def test_a_search_term_is_escaped_not_pasted():
+    """A term with a space produces a URL jobs.ch reads as a different query."""
+    from leadgen.seed.jobsch import build_filter_url
+
+    assert "term=data+engineer" in build_filter_url(term="data engineer")
+
+
+def test_categories_choose_the_sector():
+    from leadgen.seed.jobsch import build_filter_url
+
+    url = build_filter_url(categories=(106,))
+    assert "category=106" in url and "category=146" not in url
+
+
+def test_unparseable_categories_fall_back_to_the_shipped_set():
+    """A typo in a comma list must not silently widen the run to every sector
+    on the board."""
+    from leadgen.cli import _int_list
+
+    assert _int_list("106,146", (1,)) == (106, 146)
+    assert _int_list("", (106,)) == (106,)
+    assert _int_list("oops", (106,)) == (106,)
+    assert _int_list("106,oops,146", (1,)) == (106, 146)
+
+
+def test_an_explicit_url_is_taken_whole(monkeypatch):
+    """Somebody who pasted a search out of their browser means that search,
+    not that search with our defaults grafted back on."""
+    from leadgen.cli import build_parser
+
+    args = build_parser().parse_args(
+        ["--config", "x", "--jobsch-url", "https://www.jobs.ch/en/vacancies/?term=foo"]
+    )
+    assert args.jobsch_url.endswith("term=foo")

@@ -45,6 +45,13 @@ REGISTER="${REGISTER:-0}"
 # The jobs.ch search whose filter defines the sector and recency window. Build the
 # search you want in a browser and paste the address bar here. Empty = shipped IT filter.
 JOBSCH_URL="${JOBSCH_URL:-}"
+# How old a posting may be, in days. 0 = decide from the checkpoint: 30 on the first
+# run to sweep the whole board, 3 afterwards. Measured against the live board:
+# 1 day = 25 postings, 3 = 185, 7 = 478, 14 = 787, 30 = 1396.
+DAYS="${DAYS:-0}"
+TERM_QUERY="${TERM_QUERY:-}"
+# 106 IT/Telecom, 146 Engineering/Technical, 156 Management/Consulting, 167 Electronics.
+CATEGORIES="${CATEGORIES:-106,146,156,167}"
 
 TODAY="$(date +%F)"
 mkdir -p output logs .cache
@@ -55,6 +62,15 @@ LOGFILE="$ROOT/logs/run-$TODAY.log"
 
 PYTHON="$ROOT/.venv/bin/python"
 [ -x "$PYTHON" ] || PYTHON="python3"
+
+# A fresh checkpoint has never seen an employer, so the first run should sweep the
+# whole board. Every run after that only needs what appeared since.
+if [ "$DAYS" -le 0 ] 2>/dev/null; then
+  if [ -f "$CHECKPOINT" ]; then DAYS=3; else DAYS=30; fi
+  echo "  window     : last $DAYS days (auto)"
+else
+  echo "  window     : last $DAYS days"
+fi
 
 args=(
   run_leads.py
@@ -68,10 +84,13 @@ args=(
   # crawl quits before reaching the companies that had them.
   --overfetch 0
   --recrawl-after "$RECRAWL_AFTER"
+  --jobsch-days "$DAYS"
+  --jobsch-categories "$CATEGORIES"
   --only-new
   --checkpoint "$CHECKPOINT"
   --output "$OUTPUT"
 )
+[ -n "$TERM_QUERY" ] && args+=(--jobsch-term "$TERM_QUERY")
 [ -n "$JOBSCH_URL" ] && args+=(--jobsch-url "$JOBSCH_URL")
 [ "$NO_SMTP" = "1" ]  && args+=(--no-smtp)
 [ "$REGISTER" = "1" ] && args+=(--register)

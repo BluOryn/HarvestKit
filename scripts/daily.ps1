@@ -26,8 +26,19 @@
 param(
     # Rows wanted today. The run stops short and says so rather than padding.
     [int]    $Target     = 300,
-    # jobs.ch pages to walk. The shipped filter currently matches ~1,400 jobs = ~65 pages.
+    # jobs.ch pages to walk, 22 postings each. 65 covers a 30-day window.
     [int]    $Pages      = 65,
+    # How old a posting may be, in days. 0 = decide from the checkpoint: 30 on the
+    # first run to sweep the whole board, 3 afterwards. Measured against the live
+    # board: 1 day = 25 postings, 3 = 185, 7 = 478, 14 = 787, 30 = 1396. Asking for
+    # 30 every morning re-fetches thirteen hundred postings to rediscover employers
+    # that were crawled yesterday.
+    [int]    $Days       = 0,
+    # Free-text keyword added to the filter. Empty means the whole sector.
+    [string] $Term       = "",
+    # jobs.ch category ids. 106 IT/Telecom, 146 Engineering/Technical,
+    # 156 Management/Consulting, 167 Electronics/Electrotechnics.
+    [string] $Categories = "106,146,156,167",
     # "hr,tech_leadership,executive" for decision makers, "any" for every named person.
     [string] $Roles      = "hr,tech_leadership,executive",
     [string] $Countries  = "CH",
@@ -63,6 +74,15 @@ $logFile    = Join-Path $logDir "run-$today.log"
 $python = Join-Path $root ".venv/Scripts/python.exe"
 if (-not (Test-Path $python)) { $python = "python" }
 
+# A fresh checkpoint has never seen an employer, so the first run should sweep the
+# whole board. Every run after that only needs what appeared since.
+if ($Days -le 0) {
+    $Days = if (Test-Path $checkpoint) { 3 } else { 30 }
+    Write-Host "  window     : last $Days days (auto)"
+} else {
+    Write-Host "  window     : last $Days days"
+}
+
 $leadArgs = @(
     "run_leads.py",
     "--config", "configs/leads/swiss-it.yaml",
@@ -75,10 +95,13 @@ $leadArgs = @(
     # crawl quits before reaching the companies that had them.
     "--overfetch", "0",
     "--recrawl-after", $RecrawlAfter,
+    "--jobsch-days", $Days,
+    "--jobsch-categories", $Categories,
     "--only-new",
     "--checkpoint", $checkpoint,
     "--output", $output
 )
+if ($Term)      { $leadArgs += @("--jobsch-term", $Term) }
 if ($JobschUrl) { $leadArgs += @("--jobsch-url", $JobschUrl) }
 if ($NoSmtp)    { $leadArgs += "--no-smtp" }
 if ($Register)  { $leadArgs += "--register" }

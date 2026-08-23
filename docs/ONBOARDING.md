@@ -204,6 +204,66 @@ scraping a site that disallows it. Register rows carry no email addresses of
 their own, and their `source_person_url` is the attribution the data licence
 requires, so keep that column.
 
+### Every parameter
+
+`.\scripts\daily.ps1 -?` prints these too. Bash uses the same names as
+environment variables: `TARGET=600 DAYS=7 ./scripts/daily.sh`.
+
+| Parameter | Bash env | Default | What it does |
+|---|---|---|---|
+| `-Target` | `TARGET` | `300` | Rows wanted. Stops short and says `SHORTFALL` rather than padding. |
+| `-Days` | `DAYS` | `0` (auto) | **How old a posting may be.** `0` picks 30 on a fresh checkpoint and 3 afterwards. |
+| `-Pages` | `PAGES` | `65` | jobs.ch result pages to walk, 22 postings each. 65 covers a full 30-day window. |
+| `-Term` | `TERM_QUERY` | *(empty)* | Free-text keyword. Empty means the whole sector. |
+| `-Categories` | `CATEGORIES` | `106,146,156,167` | jobs.ch sector ids — see below. |
+| `-Roles` | `ROLES` | `hr,tech_leadership,executive` | Which people to keep. `any` keeps everyone. |
+| `-Countries` | `COUNTRIES` | `CH` | ISO codes. `eu` = EU-27, `europe` adds UK/CH/NO/IS. |
+| `-RecrawlAfter` | `RECRAWL_AFTER` | `30` | Days before an already-crawled employer is visited again. |
+| `-JobschUrl` | `JOBSCH_URL` | *(empty)* | A complete search URL. **Overrides `-Days`, `-Term` and `-Categories` entirely.** |
+| `-NoSmtp` | `NO_SMTP=1` | off | Skip mailbox checks. Only if setup said port 25 is blocked. |
+| `-Register` | `REGISTER=1` | off | Read the commercial register for companies naming nobody. |
+
+### How old the jobs are — `-Days`
+
+This is the parameter that decides how long the run takes. Measured live against
+the shipped sector filter:
+
+| `-Days` | Postings | Pages needed |
+|---|---|---|
+| 1 | 25 | 1 |
+| 3 | 185 | 9 |
+| 7 | 478 | 22 |
+| 14 | 787 | 36 |
+| 30 | 1,396 | 64 |
+| 60 | 1,542 | 70 |
+
+Leave it at `0`. The script sweeps 30 days the first time and 3 days every
+morning after, and prints which it chose:
+
+```
+window     : last 3 days (auto)
+```
+
+Asking for 30 days every morning is not wrong, just wasteful — it re-fetches
+thirteen hundred postings to rediscover employers crawled yesterday. Override it
+if the run was skipped for a week: `-Days 14`.
+
+### The sectors — `-Categories`
+
+| Id | Sector |
+|---|---|
+| `106` | Information technology / Telecom |
+| `146` | Engineering / Technical |
+| `156` | Management / Consulting |
+| `167` | Electronics / Electrotechnics |
+
+`-Categories 106` narrows to pure IT. A typo falls back to the shipped four
+rather than silently widening to the whole board.
+
+Employment types are fixed at permanent and fixed-term staff contracts.
+Apprenticeships and internships are deliberately excluded: no budget, no hiring
+authority.
+
 ### A different sector or country
 
 The whole targeting lives in one URL — the jobs.ch filter. Build the search you
