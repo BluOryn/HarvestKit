@@ -429,6 +429,12 @@ class HttpClient:
         except ValueError:
             return "_"
 
+    def robots_allows(self, url: str) -> bool:
+        """Would robots.txt let us fetch this? Public so a caller can tell a
+        blocked host apart from a broken one; those need different fixes and
+        reporting the wrong one sends the operator chasing a phantom."""
+        return self._robots_allow(url)
+
     def _robots_allow(self, url: str) -> bool:
         if not self.obey_robots:
             return True

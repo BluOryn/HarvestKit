@@ -45,12 +45,25 @@ def resolve_base(http: HttpClient) -> str:
             logging.info("arbeitsagentur: using %s", candidate)
             _resolved_base = candidate
             return candidate
-    logging.warning(
-        "arbeitsagentur: none of the %d known API paths answered — the service has "
-        "probably moved again. Tried: %s",
-        len(BASE_CANDIDATES),
-        ", ".join(BASE_CANDIDATES),
-    )
+    # "Moved" and "we are not allowed to ask" look identical from here -- both
+    # are an empty result -- and they need opposite fixes. rest.arbeitsagentur.de
+    # answers robots.txt with 403, which RFC 9309 defines as the whole host being
+    # off-limits, so the honest report is that we were refused rather than that
+    # the endpoint vanished.
+    if not http.robots_allows(f"{BASE_CANDIDATES[0]}?{probe}"):
+        logging.warning(
+            "arbeitsagentur: robots.txt on this host disallows the API, so no listings "
+            "will be returned. This is a permission boundary, not an outage: the "
+            "Bundesagentur publishes the API to registered users. Nothing here will "
+            "make it work without that permission."
+        )
+    else:
+        logging.warning(
+            "arbeitsagentur: none of the %d known API paths answered — the service has "
+            "probably moved again. Tried: %s",
+            len(BASE_CANDIDATES),
+            ", ".join(BASE_CANDIDATES),
+        )
     _resolved_base = ""
     return ""
 

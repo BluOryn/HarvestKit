@@ -1,12 +1,39 @@
-# EU IT-sector lead seed.
+# Europe-wide IT lead seed.
 #
-# Only *search-style* adapters work as a seed: they enumerate companies from a
-# query. The per-company ATS adapters (greenhouse, lever, ashby, personio) need
-# a board slug you already know, so they can discover nothing and are absent
-# here on purpose.
+# There are no `targets:` here, and that is the finding rather than an omission.
 #
-# A company returned by any of these queries employs IT staff by construction,
-# which is the whole targeting criterion.
+# This config used to declare five Bundesagentur für Arbeit searches. Every one
+# of them returns zero listings and has been doing so silently: the API host
+# answers robots.txt with HTTP 403, which RFC 9309 defines as the entire host
+# being off-limits, so the client correctly refuses every request. It is a
+# permission boundary, not an outage — the Bundesagentur does publish the API,
+# to registered users — and no amount of retrying or path-probing changes that.
+# Leaving the targets in place meant a Europe run began by pretending to consult
+# the largest job board in Germany and actually consulting nothing.
+#
+# What genuinely reaches Europe is the cross-company job search, passed on the
+# command line, because it is geography-first: it asks "who is hiring in
+# Sweden?" instead of filtering a global list down afterwards.
+#
+#   ./scripts/daily.sh          with REGION=europe
+#   .\scripts\daily.ps1 -Region europe
+#
+# which expands to:
+#
+#   python run_leads.py --config configs/leads/eu-it.yaml \
+#       --search-keywords configs/leads/keywords.txt \
+#       --search-keywords-multilingual configs/leads/keywords-multilingual.txt \
+#       --search-locations configs/leads/locations-eu.txt \
+#       --search-max-pages 3 --search-delay 0.4 \
+#       --arbeitnow-pages 20 --countries europe
+#
+# Measured on 3 countries x 3 keywords at one page each: 201 postings, 93
+# companies, 81 with a resolved own-domain, 53 of those naming a person, 568
+# people, 99 of them in a target role. Scaling the keyword and location lists
+# scales that roughly linearly, which is what --search-max-pages is for.
+#
+# If you obtain Bundesagentur API access, re-add the targets and set
+# `obey_robots: false` for that run only — and nowhere else.
 run:
   confirm_permission: true
   deep_scrape: false # the lead pipeline does its own per-company crawling
@@ -19,21 +46,9 @@ run:
   deep_per_host_concurrency: 2
   deep_per_host_delay_seconds: 1.0
 
-targets:
-  # Germany — Bundesagentur für Arbeit, the official federal job board.
-  # One target per role family; `was` is the query, `wo` the region.
-  - name: de-softwareentwickler
-    url: https://www.arbeitsagentur.de/jobsuche/?was=Softwareentwickler&wo=Deutschland&size=100&max_pages=25
-    adapter: arbeitsagentur
-  - name: de-it-administrator
-    url: https://www.arbeitsagentur.de/jobsuche/?was=IT-Administrator&wo=Deutschland&size=100&max_pages=15
-    adapter: arbeitsagentur
-  - name: de-devops
-    url: https://www.arbeitsagentur.de/jobsuche/?was=DevOps%20Engineer&wo=Deutschland&size=100&max_pages=10
-    adapter: arbeitsagentur
-  - name: de-data-engineer
-    url: https://www.arbeitsagentur.de/jobsuche/?was=Data%20Engineer&wo=Deutschland&size=100&max_pages=10
-    adapter: arbeitsagentur
-  - name: de-fachinformatiker
-    url: https://www.arbeitsagentur.de/jobsuche/?was=Fachinformatiker&wo=Deutschland&size=100&max_pages=15
-    adapter: arbeitsagentur
+targets: []
+
+exports:
+  csv:
+    enabled: true
+    path: "output/eu-leads.csv"
