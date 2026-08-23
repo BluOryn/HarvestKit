@@ -21,6 +21,10 @@ A Chrome MV3 extension piggybacks on the real browser session to bypass DataDome
 
 ---
 
+> **Running the daily lead harvest?** Start at
+> **[docs/ONBOARDING.md](docs/ONBOARDING.md)** — clone, one setup command, one
+> command a day. The rest of this README is the general scraper.
+
 ## Quick Start
 
 ### 1. Install Python 3.10+
