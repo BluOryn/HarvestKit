@@ -74,5 +74,9 @@ if [ "${SKIP_SMOKE_TEST:-0}" != "1" ]; then
 fi
 
 printf '\nSetup complete.\n'
-echo "Run the harvest with:  ./scripts/daily.sh"
+if [ "$SMTP_OPEN" = "1" ]; then
+  echo "Run the harvest with:  NO_SMTP=0 ./scripts/daily.sh"
+else
+  echo "Run the harvest with:  ./scripts/daily.sh"
+fi
 echo "Read docs/ONBOARDING.md for what the numbers mean."

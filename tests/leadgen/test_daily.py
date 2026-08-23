@@ -174,3 +174,98 @@ def test_an_explicit_url_is_taken_whole(monkeypatch):
         ["--config", "x", "--jobsch-url", "https://www.jobs.ch/en/vacancies/?term=foo"]
     )
     assert args.jobsch_url.endswith("term=foo")
+
+
+# --------------------------------------------------------------------------
+# The runner scripts build a command line the CLI has to accept. A typo there
+# is invisible until somebody runs the harvest and it dies on argv.
+# --------------------------------------------------------------------------
+
+CH_REGION_ARGS = [
+    "--countries",
+    "CH",
+    "--roles",
+    "hr,tech_leadership,executive",
+    "--target",
+    "300",
+    "--overfetch",
+    "0",
+    "--recrawl-after",
+    "30",
+    "--only-new",
+    "--checkpoint",
+    ".cache/daily-ch.sqlite",
+    "--output",
+    "output/leads-ch-2026-08-23.csv",
+    "--config",
+    "configs/leads/swiss-it.yaml",
+    "--jobsch-pages",
+    "65",
+    "--jobsch-days",
+    "30",
+    "--jobsch-categories",
+    "106,146,156,167",
+    "--jobsch-term",
+    "engineer",
+    "--no-smtp",
+    "--register",
+]
+
+EUROPE_REGION_ARGS = [
+    "--countries",
+    "europe",
+    "--roles",
+    "hr,tech_leadership,executive",
+    "--target",
+    "300",
+    "--overfetch",
+    "0",
+    "--recrawl-after",
+    "30",
+    "--only-new",
+    "--checkpoint",
+    ".cache/daily-europe.sqlite",
+    "--output",
+    "output/leads-europe-2026-08-23.csv",
+    "--config",
+    "configs/leads/eu-it.yaml",
+    "--search-keywords",
+    "configs/leads/keywords.txt",
+    "--search-keywords-multilingual",
+    "configs/leads/keywords-multilingual.txt",
+    "--search-locations",
+    "configs/leads/locations-eu.txt",
+    "--search-max-pages",
+    "3",
+    "--search-delay",
+    "0.4",
+    "--arbeitnow-pages",
+    "20",
+]
+
+
+@pytest.mark.parametrize("argv", [CH_REGION_ARGS, EUROPE_REGION_ARGS], ids=["ch", "europe"])
+def test_every_flag_a_runner_passes_is_one_the_cli_accepts(argv):
+    from leadgen.cli import build_parser
+
+    parsed = build_parser().parse_args(argv)
+    assert parsed.only_new is True
+    assert parsed.overfetch == 0
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "configs/leads/swiss-it.yaml",
+        "configs/leads/eu-it.yaml",
+        "configs/leads/keywords.txt",
+        "configs/leads/keywords-multilingual.txt",
+        "configs/leads/locations-eu.txt",
+    ],
+)
+def test_every_file_a_runner_names_actually_ships(path):
+    """The Europe runner names four input files by path. A rename that misses
+    one turns a full harvest into a silent zero."""
+    from pathlib import Path
+
+    assert Path(path).is_file(), f"{path} is referenced by scripts/daily.* but not in the repo"

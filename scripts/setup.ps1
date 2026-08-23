@@ -93,5 +93,6 @@ if (-not $SkipSmokeTest) {
 }
 
 Write-Host "`nSetup complete." -ForegroundColor Green
-Write-Host "Run the harvest with:  .\scripts\daily.ps1 -NoSmtp"
+$command = if ($smtpOpen) { ".\scripts\daily.ps1" } else { ".\scripts\daily.ps1 -NoSmtp" }
+Write-Host "Run the harvest with:  $command"
 Write-Host "Read docs\ONBOARDING.md for what the numbers mean."
