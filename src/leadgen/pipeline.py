@@ -34,6 +34,7 @@ def process_companies(
     guess_without_anchor: bool = True,
     stop_after: int | None = None,
     register: bool = False,
+    recrawl_after_days: float | None = None,
 ) -> Counter:
     """Resolve people for each company and persist the resulting leads.
 
@@ -45,7 +46,7 @@ def process_companies(
     counter_lock = Lock()
 
     def handle(company: CompanyContext) -> None:
-        if checkpoint.seen_company(company.domain):
+        if checkpoint.seen_company(company.domain, max_age_days=recrawl_after_days):
             with counter_lock:
                 funnel["already_done"] += 1
             return

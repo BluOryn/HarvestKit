@@ -203,6 +203,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--select-only", action="store_true", help="skip harvesting, re-cut the existing checkpoint"
     )
     parser.add_argument(
+        "--only-new",
+        action="store_true",
+        help="export only leads never delivered from this checkpoint before, and record the "
+        "ones written. This is what makes a daily run deliver fresh people instead of "
+        "re-sending yesterday's file with today's date on it",
+    )
+    parser.add_argument(
+        "--recrawl-after",
+        type=float,
+        default=0.0,
+        help="days after which an already-crawled company is crawled again (0 = never). "
+        "Staff change: an employer crawled in January may name three new directors by "
+        "June, and 'crawled once' meaning 'crawled forever' never finds them",
+    )
+    parser.add_argument(
         "--register",
         action="store_true",
         help="for companies whose own site names nobody, read the board and officers out of "
@@ -332,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
                     guess_without_anchor=not args.no_guess,
                     stop_after=int(args.target * args.overfetch) if args.overfetch else None,
                     register=args.register,
+                    recrawl_after_days=args.recrawl_after or None,
                 )
                 log.info("funnel: %s", dict(funnel))
             finally:
@@ -342,14 +358,29 @@ def main(argv: list[str] | None = None) -> int:
             if args.roles.strip().lower() == "any"
             else frozenset(part.strip() for part in args.roles.split(",") if part.strip())
         )
+        candidates = checkpoint.all_leads()
+        if args.only_new:
+            already = checkpoint.delivered_ids()
+            before = len(candidates)
+            candidates = [lead for lead in candidates if lead.fingerprint() not in already]
+            log.info(
+                "delivered ledger: %d of %d leads already went out, %d left to choose from",
+                before - len(candidates),
+                before,
+                len(candidates),
+            )
         leads, report = select(
-            checkpoint.all_leads(),
+            candidates,
             target=args.target,
             country_ceiling=args.country_ceiling,
             role_families=families,
             countries=country_set,
         )
         write_csv(leads, args.output)
+        # Only after the file exists. A lead marked delivered but never written
+        # is one the buyer never receives at all, and no later run will retry it.
+        if args.only_new:
+            checkpoint.mark_delivered(leads, batch=Path(args.output).name)
     finally:
         checkpoint.close()
 
