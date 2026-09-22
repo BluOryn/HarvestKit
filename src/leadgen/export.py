@@ -8,6 +8,8 @@ import tempfile
 from contextlib import suppress
 from pathlib import Path
 
+from job_scraper.csv_safe import safe_row
+
 from .models import LEAD_CSV_COLUMNS, Lead
 
 
@@ -30,7 +32,8 @@ def write_csv(leads: list[Lead], path: str | Path) -> None:
             writer = csv.DictWriter(handle, fieldnames=LEAD_CSV_COLUMNS)
             writer.writeheader()
             for lead in leads:
-                writer.writerow(lead.to_dict())
+                # Scraped text must not arrive in Sheets as a live formula.
+                writer.writerow(safe_row(lead.to_dict()))
         os.replace(handle.name, destination)
     except BaseException:
         with suppress(OSError):

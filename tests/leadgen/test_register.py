@@ -13,6 +13,20 @@ import pytest
 from leadgen.person import register
 from leadgen.person.roles import classify_role
 
+
+def _seen_but_empty():
+    """Reachability for a site that answered us and simply named nobody.
+
+    The distinction matters to `process_companies`: a company we could not
+    reach is counted separately from one that had no people on it, so a stub
+    that claimed to be blocked would exercise a different branch than these
+    tests intend.
+    """
+    from leadgen.person.cascade import Reachability
+
+    return Reachability(fetched=1)
+
+
 # Bedag Informatik AG, SHAB Nr. 179, 17.09.2025. One departure, two arrivals.
 BEDAG = (
     "Bedag Informatik AG, in Bern, CHE-108.955.156, Aktiengesellschaft "
@@ -289,7 +303,7 @@ class _NoHttp:
 
 def test_the_register_rescues_a_company_whose_site_names_nobody(tmp_path, monkeypatch):
     pipeline, CompanyContext, checkpoint = _pipeline_bits(tmp_path)
-    monkeypatch.setattr(pipeline, "resolve_people", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline, "resolve_people_detailed", lambda *a, **k: ([], _seen_but_empty()))
     monkeypatch.setattr(
         pipeline,
         "people_from_register",
@@ -309,7 +323,11 @@ def test_the_register_is_never_consulted_for_a_company_the_crawl_answered(tmp_pa
     """It costs two requests to answer a question the site already answered,
     and the site is the better source when it has one."""
     pipeline, CompanyContext, checkpoint = _pipeline_bits(tmp_path)
-    monkeypatch.setattr(pipeline, "resolve_people", lambda *a, **k: [register.PersonHit(name="Anna Meier")])
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_people_detailed",
+        lambda *a, **k: ([register.PersonHit(name="Anna Meier")], _seen_but_empty()),
+    )
     called: list[str] = []
     monkeypatch.setattr(pipeline, "people_from_register", lambda name, http, **k: called.append(name) or [])
     try:
@@ -322,7 +340,7 @@ def test_the_register_is_never_consulted_for_a_company_the_crawl_answered(tmp_pa
 
 def test_the_register_is_off_unless_it_is_asked_for(tmp_path, monkeypatch):
     pipeline, CompanyContext, checkpoint = _pipeline_bits(tmp_path)
-    monkeypatch.setattr(pipeline, "resolve_people", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline, "resolve_people_detailed", lambda *a, **k: ([], _seen_but_empty()))
     called: list[str] = []
     monkeypatch.setattr(pipeline, "people_from_register", lambda name, http, **k: called.append(name) or [])
     try:

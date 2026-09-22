@@ -8,6 +8,19 @@ from leadgen.person.roles import classify_role
 from leadgen.seed.jobboard import MAX_AD_CONTACTS, companies_from_listings
 
 
+def _seen_but_empty():
+    """Reachability for a site that answered us and simply named nobody.
+
+    The distinction matters to `process_companies`: a company we could not
+    reach is counted separately from one that had no people on it, so a stub
+    that claimed to be blocked would exercise a different branch than these
+    tests intend.
+    """
+    from leadgen.person.cascade import Reachability
+
+    return Reachability(fetched=1)
+
+
 class StubHttp:
     def get(self, url, **kwargs):
         return (url, "<html></html>") if "acme.de" in url else None
@@ -128,7 +141,7 @@ def test_an_ad_contact_rescues_a_company_whose_site_names_nobody(tmp_path, monke
     from leadgen.checkpoint import Checkpoint
     from leadgen.person.hit import PersonHit
 
-    monkeypatch.setattr(pipeline, "resolve_people", lambda *a, **k: [])
+    monkeypatch.setattr(pipeline, "resolve_people_detailed", lambda *a, **k: ([], _seen_but_empty()))
     checkpoint = Checkpoint(str(tmp_path / "cp.sqlite"))
     try:
         company = CompanyContext(

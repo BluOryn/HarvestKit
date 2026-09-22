@@ -77,9 +77,30 @@ def test_universal_extract_returns_none_for_non_job():
 
 
 def test_phone_filter_rejects_finnkode():
-    """Phone-mining regex must reject 9-12-digit raw blobs (finnkode IDs)."""
+    """An un-separated digit blob is an ID, judged on the raw substring.
+
+    The blob rule has to run *before* normalisation. Run after it, every
+    national-format European number is a bare digit blob too, and the filter
+    threw away 100% of them — see `test_a_national_number_survives_the_id_rule`.
+    """
+    from job_scraper.universal import _plausible_raw_phone
+
+    assert _plausible_raw_phone("462751961") is False  # raw 9-digit, no separators
+    assert _plausible_raw_phone("+47 95 83 21 97") is True
+
+
+def test_a_national_number_survives_the_id_rule():
+    """The Swiss/German/French national format is the common case in Europe."""
+    from job_scraper.universal import _normalize_phone, _plausible_raw_phone, _valid_phone
+
+    for raw in ("044 215 15 78", "030 12345678", "01 23 45 67 89", "+41 44 215 15 78"):
+        assert _plausible_raw_phone(raw) is True, raw
+        assert _valid_phone(_normalize_phone(raw)) is True, raw
+
+
+def test_a_repeated_digit_blob_is_still_rejected_after_normalising():
     from job_scraper.universal import _valid_phone
 
-    assert _valid_phone("462751961") is False  # raw 9-digit, no separators
-    assert _valid_phone("12345678") is False  # raw 8-digit, no separators
-    assert _valid_phone("+47 95 83 21 97") is True
+    assert _valid_phone("00000000") is False
+    assert _valid_phone("12345678") is False
+    assert _valid_phone("1234") is False

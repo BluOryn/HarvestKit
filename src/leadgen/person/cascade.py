@@ -9,12 +9,16 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
+from typing import Optional
 from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
+from ..email.validate import is_role_account
 from ..net_guard import guard
 from .hit import PersonHit
+from .jobad import _email_belongs_to
 from .paths import candidate_paths
 from .roles import role_rank
 from .strategies import impressum, jsonld_person, press, sitemap, team
@@ -31,6 +35,20 @@ def _key(name: str) -> str:
     return _WS_RX.sub(" ", (name or "").strip().lower())
 
 
+def _email_rank(email: str, name: str) -> int:
+    """How good an address is *for this person*. Higher wins.
+
+    2 — a personal address that echoes the name: unambiguous.
+    1 — a personal-looking address that does not: better than a shared inbox.
+    0 — a role account, or nothing at all.
+    """
+    if not email:
+        return 0
+    if is_role_account(email):
+        return 0
+    return 2 if _email_belongs_to(email, name) else 1
+
+
 def merge_hits(hits: list[PersonHit]) -> list[PersonHit]:
     """One record per person, taking the best value for each field."""
     merged: dict[str, PersonHit] = {}
@@ -42,9 +60,16 @@ def merge_hits(hits: list[PersonHit]) -> list[PersonHit]:
         if existing is None:
             merged[key] = PersonHit(**vars(hit))
             continue
-        for attribute in ("email", "phone", "linkedin", "source_url"):
+        for attribute in ("phone", "linkedin", "source_url"):
             if not getattr(existing, attribute) and getattr(hit, attribute):
                 setattr(existing, attribute, getattr(hit, attribute))
+        # Email is not first-wins. The crawl order puts /impressum before
+        # /team in DACH, so a shared `info@` scraped from the legal notice used
+        # to beat the person's real address found a page later — and then the
+        # domain had no personal address left for pattern inference. Rank the
+        # candidates instead of trusting arrival order.
+        if hit.email and _email_rank(hit.email, existing.name) > _email_rank(existing.email, existing.name):
+            existing.email = hit.email
         # A title the buyer asked for beats one they did not, and among titles
         # they did ask for, the function beats the office: "CTO" is more useful
         # on the row than "Geschäftsführer" even though both are true of the
@@ -54,20 +79,89 @@ def merge_hits(hits: list[PersonHit]) -> list[PersonHit]:
     return list(merged.values())
 
 
-def _harvest(url: str, http, hits: list[PersonHit]) -> None:
+@dataclass
+class Reachability:
+    """What the network said while crawling one company.
+
+    Without this, a company behind a bot wall and a company whose site genuinely
+    names nobody are the same event: `resolve_people` returns an empty list for
+    both, and the funnel files both under `no_person_found`. That conflation is
+    why a run could report thousands of companies "not naming anyone" while the
+    real answer was that we never saw their pages — and why the runbook's advice
+    for that symptom pointed at the team-page parser, which was innocent.
+    """
+
+    fetched: int = 0
+    blocked: int = 0
+    errors: int = 0
+    not_found: int = 0
+    robots_denied: int = 0
+
+    @property
+    def saw_content(self) -> bool:
+        return self.fetched > 0
+
+    @property
+    def walled(self) -> bool:
+        """Every attempt was refused, and at least one refusal was a refusal of
+        *us* rather than a missing page."""
+        return not self.saw_content and (self.blocked > 0 or self.robots_denied > 0)
+
+    def note(self, outcome_value: str) -> None:
+        if outcome_value == "ok":
+            self.fetched += 1
+        elif outcome_value == "blocked":
+            self.blocked += 1
+        elif outcome_value == "robots_denied":
+            self.robots_denied += 1
+        elif outcome_value == "not_found":
+            self.not_found += 1
+        else:
+            self.errors += 1
+
+
+def _harvest(url: str, http, hits: list[PersonHit], reach: Optional[Reachability] = None) -> None:
     """Fetch one page and run every strategy over it. Never raises."""
     if not guard(url):
         return
-    try:
-        response = http.get(url)
-    except Exception as exc:
-        log.debug("cascade: %s failed: %s", url, exc)
-        return
-    if not response:
-        return
-    final_url, html = response
-    if not html:
-        return
+    # `fetch` carries the reason a page did not arrive; `get` flattens every
+    # reason to None. Prefer the former, but keep working against the simpler
+    # client that tests and tools supply.
+    fetch = getattr(http, "fetch", None)
+    if callable(fetch):
+        try:
+            result = fetch(url)
+        except Exception as exc:
+            log.debug("cascade: %s failed: %s", url, exc)
+            if reach is not None:
+                reach.errors += 1
+            return
+        outcome = getattr(result, "outcome", None)
+        if reach is not None:
+            reach.note(getattr(outcome, "value", str(outcome or "error")))
+        if not getattr(result, "ok", False) or not result.text:
+            return
+        final_url, html = result.final_url or url, result.text
+    else:
+        try:
+            response = http.get(url)
+        except Exception as exc:
+            log.debug("cascade: %s failed: %s", url, exc)
+            if reach is not None:
+                reach.errors += 1
+            return
+        if not response:
+            if reach is not None:
+                reach.errors += 1
+            return
+        final_url, html = response
+        if not html:
+            if reach is not None:
+                reach.errors += 1
+            return
+        if reach is not None:
+            reach.fetched += 1
+
     for strategy in STRATEGIES:
         try:
             hits.extend(strategy.extract(html, final_url))
@@ -164,11 +258,39 @@ def resolve_people(
     max_nav_pages: int = 6,
 ) -> list[PersonHit]:
     """Crawl a company's own site for named people. Never raises."""
+    people, _ = resolve_people_detailed(
+        domain,
+        country,
+        http,
+        max_pages=max_pages,
+        use_sitemap=use_sitemap,
+        max_person_pages=max_person_pages,
+        max_nav_pages=max_nav_pages,
+    )
+    return people
+
+
+def resolve_people_detailed(
+    domain: str,
+    country: str,
+    http,
+    *,
+    max_pages: int = 8,
+    use_sitemap: bool = True,
+    max_person_pages: int = 10,
+    max_nav_pages: int = 6,
+) -> tuple[list[PersonHit], Reachability]:
+    """`resolve_people`, plus what the network said while doing it.
+
+    The caller needs both: an empty result means something different depending
+    on whether the site answered.
+    """
+    reach = Reachability()
     if not domain:
-        return []
+        return [], reach
     hits: list[PersonHit] = []
     for path in candidate_paths(country)[:max_pages]:
-        _harvest(f"https://{domain}{path}", http, hits)
+        _harvest(f"https://{domain}{path}", http, hits, reach)
 
     # Whatever the site itself links to. Guessed paths only cover the layouts
     # someone thought of in advance; this covers the rest.
@@ -177,7 +299,7 @@ def resolve_people(
         for url in discover_people_pages(domain, http, limit=max_nav_pages):
             if url not in seen_urls:
                 seen_urls.add(url)
-                _harvest(url, http, hits)
+                _harvest(url, http, hits, reach)
     except Exception as exc:
         log.debug("cascade: nav discovery failed for %s: %s", domain, exc)
 
@@ -186,8 +308,8 @@ def resolve_people(
     if use_sitemap and max_person_pages > 0:
         try:
             for url in sitemap.person_urls(domain, http, limit=max_person_pages):
-                _harvest(url, http, hits)
+                _harvest(url, http, hits, reach)
         except Exception as exc:
             log.debug("cascade: sitemap mining failed for %s: %s", domain, exc)
 
-    return merge_hits(hits)
+    return merge_hits(hits), reach

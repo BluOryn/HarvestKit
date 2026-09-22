@@ -91,7 +91,7 @@ def _resolve_email(
         # provenance available; a probe cannot improve on it and a refused
         # probe must not demote it.
         return candidate, "published", evidence_url
-    if verdict.status == "ok":
+    if verdict.status == "ok" and not guessed:
         # NOTE: "ok" means the domain rejected a random probe address, i.e. it
         # does per-mailbox validation — NOT that this specific mailbox was
         # confirmed. The address is still derived; what is verified is that the
@@ -100,6 +100,12 @@ def _resolve_email(
     if verdict.status == "catch_all":
         return candidate, "catch_all", evidence_url
     if guessed:
+        # No anchor at all: the local part is the modal `first.last` applied
+        # blind. The SMTP probe said something about the *domain*, never about
+        # this address, so it cannot lift a blind guess above the floor. The
+        # old ordering tested the probe first and stamped these "verified",
+        # which is the single most misleading value the column can carry —
+        # a buyer filtering to `verified` would have got pure guesses.
         return candidate, "inferred_low", evidence_url
     status = "inferred_high" if pattern_confidence == "high" else "inferred_medium"
     return candidate, status, evidence_url
@@ -152,16 +158,36 @@ def build_leads(
     smtp: bool = True,
     guess_without_anchor: bool = True,
 ) -> list[Lead]:
+    # Cleaning happens once, here, and everything downstream uses the result.
+    # Anchors used to be drawn from the *raw* hits, which meant an Impressum
+    # line naming two people ("Dana Aleff, Erik Mueller") voted on the domain's
+    # address format as a single mangled name, and a page-level mailbox voted
+    # as though it belonged to whoever happened to be on the page.
+    clean = _clean_hits(hits)
+
     anchors: list[tuple[str, str]] = list(company.extra_anchors)
-    for hit in hits:
-        if hit.name and hit.email and not is_role_account(hit.email):
-            anchors.append((hit.name, hit.email))
+    for hit in clean:
+        # The same three conditions `_resolve_email` uses to call an address
+        # *published*. `infer_pattern` requires a format consistent with every
+        # example and returns nothing on any disagreement, so one unattributed
+        # address destroys inference for the whole domain — and every real
+        # person there drops from inferred_high to a fallback guess.
+        if not (hit.name and hit.email):
+            continue
+        if is_role_account(hit.email) or not _address_echoes(hit.email, hit.name):
+            log.debug(
+                "assemble: %r does not attribute to %r — not voting on the domain pattern",
+                hit.email,
+                hit.name,
+            )
+            continue
+        anchors.append((hit.name, hit.email))
 
     pattern, pattern_confidence = infer_pattern(anchors)
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     leads: list[Lead] = []
-    for hit in _clean_hits(hits):
+    for hit in clean:
         first, last = split_name(hit.name)
         lead = Lead(
             person_name=hit.name,

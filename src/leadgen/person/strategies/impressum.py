@@ -12,7 +12,9 @@ import re
 
 from bs4 import BeautifulSoup
 
+from ...email.validate import is_role_account
 from ..hit import PersonHit
+from ..jobad import _email_belongs_to
 from ..roles import split_name
 
 # Labels that introduce a named human. Ordered longest-first so
@@ -65,6 +67,15 @@ def _looks_like_a_person(name: str) -> bool:
     return bool(last) and 1 < len(name.split()) <= 5
 
 
+def _page_email_for(page_emails: list[str], name: str) -> str:
+    """The one page-level address, but only when it plausibly belongs to `name`."""
+    candidates = [address for address in page_emails if not is_role_account(address)]
+    if len(candidates) != 1:
+        return ""
+    address = candidates[0]
+    return address if _email_belongs_to(address, name) else ""
+
+
 def extract(html: str, url: str) -> list[PersonHit]:
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text("\n", strip=True)
@@ -72,6 +83,7 @@ def extract(html: str, url: str) -> list[PersonHit]:
 
     hits: list[PersonHit] = []
     seen: set[str] = set()
+    page_emails = [address for address in page_emails if not is_role_account(address)] or page_emails
     for match in _LABEL_RX.finditer(text):
         raw_name = match.group("value").strip(" ., ")
         # The value may carry a trailing email; keep the name, note the address.
@@ -87,13 +99,19 @@ def extract(html: str, url: str) -> list[PersonHit]:
             PersonHit(
                 name=raw_name,
                 role=match.group("label").strip(),
-                # Only attribute a page-level address when there is exactly one
-                # candidate; more than one and we cannot tell whose it is.
-                email=(
-                    inline_email.group(0)
-                    if inline_email
-                    else (page_emails[0] if len(page_emails) == 1 else "")
-                ),
+                # An address printed next to the name is theirs. A page-level
+                # one is only theirs if it reads like it.
+                #
+                # A German Impressum almost always carries exactly one address
+                # and it is almost always `info@` or `kontakt@`. Attributing it
+                # did two kinds of damage: the person shipped with a shared
+                # mailbox marked as their own, and — because /impressum is the
+                # first path crawled and the merge was first-wins — it beat the
+                # real `a.schmidt@` found later on the team page. The domain
+                # then had no personal address left to infer a format from, so
+                # every colleague fell back to `first.last` on a domain whose
+                # actual format was `f.last`.
+                email=(inline_email.group(0) if inline_email else _page_email_for(page_emails, raw_name)),
                 source_url=url,
                 strategy="impressum",
             )

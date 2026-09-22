@@ -7,12 +7,16 @@ text inside the same card.
 
 from __future__ import annotations
 
+import logging
 import re
+import unicodedata
 
 from bs4 import BeautifulSoup, Tag
 
 from ..hit import PersonHit
 from ..roles import split_name
+
+log = logging.getLogger(__name__)
 
 _NAME_TAGS = ("h2", "h3", "h4", "h5", "h6", "strong", "b")
 _ENTITY_RX = re.compile(
@@ -64,6 +68,93 @@ def _looks_like_a_person(text: str) -> bool:
     return bool(split_name(value)[1])
 
 
+#: Both conventions are in live use for the same surname, and an address may
+#: pick either: Müller appears as both "mueller@" and "muller@".
+_EXPANSIONS = {"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss", "å": "aa", "æ": "ae", "ø": "oe"}
+
+
+def _name_variants(value: str) -> set[str]:
+    """Lowercase ASCII spellings this text could plausibly be written as."""
+    lowered = (value or "").lower()
+    expanded = "".join(_EXPANSIONS.get(ch, ch) for ch in lowered)
+    stripped = "".join(
+        ch for ch in unicodedata.normalize("NFKD", lowered) if ch.isalpha() and not unicodedata.combining(ch)
+    )
+    return {
+        "".join(ch for ch in expanded if ch.isalpha()),
+        stripped,
+    } - {""}
+
+
+def _echoes_name(haystack: str, name: str) -> bool:
+    """Does `haystack` carry a whole name token of at least three letters?
+
+    Three is the floor because shorter tokens ("de", "van", "le") appear inside
+    unrelated words often enough to match by accident — "verkauf@" would
+    otherwise read as a hit on "Jan de Vries".
+    """
+    hay = _name_variants(haystack)
+    if not hay:
+        return False
+    for token in name.split():
+        for variant in _name_variants(token):
+            if len(variant) >= 3 and any(variant in candidate for candidate in hay):
+                return True
+    return False
+
+
+def _contacts_between_headings(tag: Tag) -> tuple[str, str]:
+    """The email and LinkedIn URL belonging to this heading's person.
+
+    Walks forward in document order and stops at the next heading that reads
+    like somebody else's name, so an anchor can only ever be attributed to the
+    person it actually follows.
+    """
+    email = ""
+    linkedin = ""
+    for node in tag.next_elements:
+        if not isinstance(node, Tag):
+            continue
+        if (
+            node.name in _NAME_TAGS
+            and node is not tag
+            and _looks_like_a_person(node.get_text(" ", strip=True))
+        ):
+            break
+        if node.name != "a":
+            continue
+        href = str(node.get("href") or "").strip()
+        lowered = href.lower()
+        if not email and lowered.startswith("mailto:"):
+            email = href[7:].split("?")[0]
+        elif not linkedin and "linkedin.com/in/" in lowered:
+            linkedin = href
+    return email, linkedin
+
+
+def _address_echoes_name(email: str, name: str) -> bool:
+    return bool(email) and _echoes_name(email.split("@", 1)[0], name)
+
+
+def _linkedin_contradicts(url: str, name: str) -> bool:
+    """True when the profile slug spells out somebody else.
+
+    A LinkedIn URL is never checked downstream — `build_leads` writes
+    `person_linkedin` verbatim — so a wrong one is delivered with no way for
+    the buyer to notice. `/in/hans-mueller-8a2b1` under Petra Müller's heading
+    is a mis-scoped anchor, and the slug says so outright. Slugs that carry no
+    readable name (`/in/p-m-1234`, an opaque id) are left alone: absence of
+    evidence is not contradiction.
+    """
+    if not url or not name:
+        return False
+    slug = url.lower().split("linkedin.com/in/", 1)[-1].strip("/").split("?")[0]
+    words = [part for part in re.split(r"[^a-zA-ZÀ-ɏ]+", slug) if len(part) >= 3]
+    if not words:
+        return False
+    return not _echoes_name(" ".join(words), name)
+
+
 def _card_of(tag: Tag) -> Tag:
     """Climb to the smallest ancestor that plausibly wraps one person."""
     node: Tag = tag
@@ -108,19 +199,26 @@ def extract(html: str, url: str) -> list[PersonHit]:
                 ):
                     role = candidate
 
-        email = ""
-        mailto = card.find("a", href=re.compile(r"^mailto:", re.I))
-        if mailto:
-            email = str(mailto.get("href", ""))[7:].split("?")[0]
-        else:
+        # Contact details are taken from the span between this heading and the
+        # next person's, not from the whole card.
+        #
+        # `_card_of` climbs three levels, and on a great many real team pages
+        # that wrapper holds *everybody* — a flat list, or two sibling cards
+        # under one container. `card.find("a", mailto)` then returns the first
+        # address in the entire block, so the first person's email and LinkedIn
+        # profile were stamped onto every colleague below them. Role assignment
+        # already scoped itself against sibling headings; contact details did
+        # not, and they are the fields that actually get mailed.
+        email, linkedin = _contacts_between_headings(tag)
+        if linkedin and _linkedin_contradicts(linkedin, name):
+            log.debug("team: %s does not belong to %r — dropping", linkedin, name)
+            linkedin = ""
+        if not email:
+            # Looser fallback for cards that print an address as plain text.
+            # It can reach past the boundary, so it must echo the name.
             found = _EMAIL_RX.search(card.get_text(" ", strip=True))
-            if found:
+            if found and _address_echoes_name(found.group(0), name):
                 email = found.group(0)
-
-        linkedin = ""
-        profile = card.find("a", href=re.compile(r"linkedin\.com/in/", re.I))
-        if profile:
-            linkedin = str(profile.get("href", ""))
 
         seen.add(name.lower())
         hits.append(

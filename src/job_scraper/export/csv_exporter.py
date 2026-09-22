@@ -5,6 +5,7 @@ import tempfile
 from contextlib import suppress
 
 from ..config import CsvExportConfig
+from ..csv_safe import safe_row
 from ..models import CSV_COLUMNS, JobListing
 
 
@@ -34,7 +35,8 @@ def export_csv(jobs: list[JobListing], cfg: CsvExportConfig) -> None:
             writer = csv.DictWriter(handle, fieldnames=CSV_COLUMNS, extrasaction="ignore")
             writer.writeheader()
             for job in jobs:
-                writer.writerow(job.to_dict())
+                # Scraped text must not arrive in Sheets as a live formula.
+                writer.writerow(safe_row(job.to_dict()))
         os.replace(tmp_path, cfg.path)
     except Exception:
         with suppress(OSError):

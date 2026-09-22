@@ -1081,18 +1081,201 @@ SENIORITY = [
 #   "EUR 60.000 – 75.000 pro Jahr"
 #   "$120,000 - $150,000 per year"
 #   "CHF 80 000.– bis 110 000.–"
-_NUM = r"\d{2,3}(?:[.,'\s  ]\d{3})*(?:[.,]\d+)?"
+# A money amount. The pattern this replaces was
+# `\d{2,3}(?:[.,'\s]\d{3})*(?:[.,]\d+)?`, which demands a separator after the
+# first two or three digits. An unseparated figure — "60000", or the four-digit
+# monthly rates German and Swiss ads quote — was therefore truncated to its
+# first three digits, so "EUR 60000 - 80000" exported as salary_min=600 and
+# salary_max=800. Both the separated and the plain forms are accepted now.
+_NUM = (
+    r"\d{1,3}(?:[.,'   ]\d{3})+(?:[.,]\d{1,2})?"  # 45.000 / 80'000 / 45 000
+    r"|\d{3,7}(?:[.,]\d{1,2})?"  # 60000
+    # "45k". The two-digit form is admitted only immediately before the
+    # suffix, so a bare short number elsewhere on the page is still not money.
+    r"|\d{1,3}(?=\s?[kK]\b)"
+)
+_CUR = r"€|EUR|USD|US\$|\$|£|GBP|CHF|SFr\.|Fr\.|SEK|DKK|NOK|PLN|CZK|HUF|zł|\bkr\.?\b"
+_PERIOD = (
+    r"j[äa]hrlich|jahr|annual(?:ly)?|annuel(?:le)?|ann[ée]e|annuale|annuo|anual|"
+    r"per annum|p\.a\.|year(?:ly)?|yr|"
+    r"monatlich|monat|month(?:ly)?|mensuel(?:le)?|mensile|mensual|mois|mese|maand|"
+    r"st[üu]ndlich|stunde|hour(?:ly)?|heure|orario|ora|hora|uur|"
+    # Nordic. finn.no, NAV and karrierestart are three of the shipped
+    # adapters, so leaving these out meant Norwegian pay parsed as nothing.
+    r"[åa]rlig|pr\.? ?[åa]r|[åa]r|m[åa]nedlig|m[åa]ned|m[åa]nad|mnd|"
+    r"timel[øo]nn|pr\.? ?time|timme|time|"
+    r"mo\b|hr\b"
+)
+#: Currency may sit on either side of the amount. Requiring it in front — as
+#: this did, with a non-optional leading group — meant "45.000 EUR" and
+#: "60.000 – 75.000 EUR pro Jahr" never matched at all. That is the ordinary
+#: way a German, French or Italian posting writes pay, so the dominant European
+#: form parsed as no salary whatsoever.
 SALARY_RX = re.compile(
-    r"(?:€|EUR|USD|US\$|\$|£|GBP|CHF|Fr\.|SFr\.|SEK|DKK|NOK|PLN|CZK|HUF)\s?"
-    rf"({_NUM})\s?(?:[.,]–|–|–|\.\-|\-|—)?\s?(?:k\b|tausend|thousand)?\s?"
-    r"(?:-|–|—|to|bis|à|a)?\s?"
-    r"(?:€|EUR|USD|US\$|\$|£|GBP|CHF|Fr\.|SFr\.|SEK|DKK|NOK|PLN|CZK|HUF)?\s?"
-    rf"({_NUM})?\s?"
-    r"(?:[.,]–|–|—|\.\-)?\s?"
-    r"(per|/|pro|par|al)?\s?"
-    r"(year|yr|p\.a\.|annual|jahr|jährlich|annee|année|month|mo|monat|monatlich|mois|hour|hr|stunde|heure|ora)?",
+    rf"(?:(?P<cur1>{_CUR})\s?)?"
+    rf"(?P<lo>{_NUM})"
+    r"(?:\s?(?P<lok>k)\b)?"
+    r"\s?(?:[.,]–|–|—|\.\-)?\s?"
+    rf"(?:(?P<cur2>{_CUR})\s?)?"
+    r"\s?(?:-|–|—|to|bis|until|à|a|und|and)\s?"
+    rf"(?:(?P<cur3>{_CUR})\s?)?"
+    rf"(?P<hi>{_NUM})"
+    r"(?:\s?(?P<hik>k)\b)?"
+    r"\s?(?:[.,]–|–|—|\.\-)?\s?"
+    rf"(?:(?P<cur4>{_CUR})\s?)?"
+    rf"(?:\s?(?:per|/|pro|par|al|im|au)?\s?(?P<period>{_PERIOD}))?",
     re.I,
 )
+#: The same shape without a range, for "ab 65.000 EUR" or "CHF 110'000 / Jahr".
+SALARY_SINGLE_RX = re.compile(
+    rf"(?:(?P<cur1>{_CUR})\s?)?"
+    rf"(?P<lo>{_NUM})"
+    r"(?:\s?(?P<lok>k)\b)?"
+    r"\s?(?:[.,]–|–|—|\.\-)?\s?"
+    rf"(?:(?P<cur2>{_CUR})\s?)?"
+    rf"(?:\s?(?:per|/|pro|par|al|im|au)?\s?(?P<period>{_PERIOD}))?",
+    re.I,
+)
+
+#: Longest-first, so "jahr" is tested before the bare "hr" that lives inside
+#: it. The chain this replaces read `elif "hr" in p`, and because "jahr"
+#: contains "hr", every German annual salary was exported as an hourly rate.
+#: "mo" sat before "monat" in the old alternation for the same reason.
+_PERIOD_TO_UNIT: tuple[tuple[str, str], ...] = (
+    ("jährlich", "year"),
+    ("jahrlich", "year"),
+    ("jahr", "year"),
+    ("annually", "year"),
+    ("annual", "year"),
+    ("annuelle", "year"),
+    ("annuel", "year"),
+    ("année", "year"),
+    ("annee", "year"),
+    ("annuale", "year"),
+    ("annuo", "year"),
+    ("anual", "year"),
+    ("per annum", "year"),
+    ("p.a.", "year"),
+    ("yearly", "year"),
+    ("year", "year"),
+    ("yr", "year"),
+    ("monatlich", "month"),
+    ("monat", "month"),
+    ("monthly", "month"),
+    ("month", "month"),
+    ("mensuelle", "month"),
+    ("mensuel", "month"),
+    ("mensile", "month"),
+    ("mensual", "month"),
+    ("mois", "month"),
+    ("mese", "month"),
+    ("maand", "month"),
+    ("mo", "month"),
+    ("årlig", "year"),
+    ("arlig", "year"),
+    ("pr. år", "year"),
+    ("pr år", "year"),
+    ("år", "year"),
+    ("ar", "year"),
+    ("månedlig", "month"),
+    ("måned", "month"),
+    ("manedlig", "month"),
+    ("maned", "month"),
+    ("månad", "month"),
+    ("manad", "month"),
+    ("mnd", "month"),
+    ("timelønn", "hour"),
+    ("timelonn", "hour"),
+    ("pr. time", "hour"),
+    ("pr time", "hour"),
+    ("timme", "hour"),
+    ("time", "hour"),
+    ("stündlich", "hour"),
+    ("stundlich", "hour"),
+    ("stunde", "hour"),
+    ("hourly", "hour"),
+    ("hour", "hour"),
+    ("heure", "hour"),
+    ("orario", "hour"),
+    ("ora", "hour"),
+    ("hora", "hour"),
+    ("uur", "hour"),
+    ("hr", "hour"),
+)
+
+
+def _is_money(match) -> bool:
+    """A number is only pay if something on the page says so.
+
+    Making the currency optional — which is what lets "45.000 EUR" parse at
+    all — also means a bare figure can match. Without this guard "Founded in
+    1998" becomes a salary of 1998 and "Over 200 employees" becomes 200. So a
+    match must carry either a currency symbol or a period word; a naked number
+    is rejected however well-formed it looks.
+    """
+    groups = match.groupdict()
+    has_currency = any(groups.get(name) for name in ("cur1", "cur2", "cur3", "cur4"))
+    return bool(has_currency or groups.get("period"))
+
+
+def _first_salary_match(text: str):
+    """The first range that reads as money, else the first single figure that
+    does. Ranges are preferred so "60.000 - 75.000" is not cut to its floor."""
+    for rx in (SALARY_RX, SALARY_SINGLE_RX):
+        for match in rx.finditer(text):
+            if _is_money(match):
+                return match
+    return None
+
+
+def _apply_k(amount, suffix) -> str:
+    """Multiply by a thousand when the figure was written "45k".
+
+    The `k` was matched and then discarded, so "EUR 45k - 60k" exported a
+    salary of 45 — a number wrong by three orders of magnitude, and wrong in
+    the direction that makes a job look like a scam.
+    """
+    if not amount or not suffix:
+        return amount
+    try:
+        return str(int(round(float(str(amount).replace(",", ".")) * 1000)))
+    except (TypeError, ValueError):
+        return amount
+
+
+def _period_to_unit(period: str) -> str:
+    """year / month / hour for a captured period word."""
+    value = (period or "").strip().lower()
+    for token, unit in _PERIOD_TO_UNIT:
+        if value.startswith(token):
+            return unit
+    return "year"
+
+
+#: CHF and NOK are matched before the bare `$`, and a lone "kr" is never taken:
+#: it is ambiguous across SEK, NOK and DKK, and guessing would put the wrong
+#: currency on the row.
+_CURRENCY_TO_CODE: tuple[tuple[str, str], ...] = (
+    (r"€|\bEUR\b", "EUR"),
+    (r"\bCHF\b|\bSFr\.|\bFr\.", "CHF"),
+    (r"£|\bGBP\b", "GBP"),
+    (r"\bUS\$|\bUSD\b|\$", "USD"),
+    (r"\bSEK\b", "SEK"),
+    (r"\bNOK\b", "NOK"),
+    (r"\bDKK\b", "DKK"),
+    (r"\bPLN\b|zł", "PLN"),
+    (r"\bCZK\b", "CZK"),
+    (r"\bHUF\b", "HUF"),
+)
+
+
+def _currency_code(text: str) -> str:
+    for pattern, code in _CURRENCY_TO_CODE:
+        if re.search(pattern, text, re.I):
+            return code
+    return ""
+
+
 EMAIL_RX = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
 # 2-5 digit groups after the optional country/area code. Three groups was too
 # few for Norwegian (95 83 21 97) and Swiss (44 215 15 78) numbers — they came
@@ -1130,7 +1313,39 @@ def _detect_tech(text: str) -> list[str]:
     return [_TECH_LOOKUP[t] for t in TECH_DICT_KEYS if t in hits]
 
 
+def _apply_description_fallback(j: JobListing, soup: BeautifulSoup) -> None:
+    """Take the description out of the DOM when the structured one is thin.
+
+    Scrape the DOM only when the structured description is missing or short,
+    and keep whichever is longer — a terse-but-real JSON-LD description should
+    not be replaced by page chrome, and page text should not be discarded
+    because JSON-LD gave us one short sentence.
+
+    Idempotent, because it runs twice: once before `_apply_heuristics`, which
+    needs a description to scope itself to, and again from `_finalize` for the
+    callers that do not go through the first path.
+    """
+    if len(j.description) >= MIN_DESCRIPTION_CHARS:
+        return
+    for sel in DESCRIPTION_SELECTORS:
+        el = soup.select_one(sel)
+        if el is None:
+            continue
+        txt = el.get_text(" ", strip=True)
+        if len(txt) > len(j.description) and len(txt) > MIN_DESCRIPTION_CHARS:
+            j.description = txt[:10000]
+            return
+
+
 def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
+    # The scoping guard below is the whole point of this function, and it is
+    # worthless unless the description already exists. It used to be populated
+    # by `_finalize`, which runs *after* this — so on any page without JSON-LD
+    # (most of them) `j.description` was empty here, the guard never fired, and
+    # the heuristics scanned the entire document exactly as the comment says
+    # they must not.
+    _apply_description_fallback(j, soup)
+
     body = soup.find("body") or soup
     page_text = body.get_text(" ", strip=True)
 
@@ -1171,33 +1386,21 @@ def _apply_heuristics(j: JobListing, soup: BeautifulSoup) -> None:
             j.remote_type = "onsite"
 
     if not (j.salary_min or j.salary_max):
-        m = SALARY_RX.search(text)
+        # A range first; a single figure only if no range is present, so
+        # "ab 65.000 EUR" is still read but "60.000 - 75.000" is not reduced
+        # to its lower bound.
+        m = _first_salary_match(text)
         if m:
+            groups = m.groupdict()
             whole = m.group(0)
-            lo, hi, period = m.group(1), m.group(2), m.group(4)
-            if lo:
-                j.salary_min = _normalize_amount(lo)
-            if hi:
-                j.salary_max = _normalize_amount(hi)
+            if groups.get("lo"):
+                j.salary_min = _apply_k(_normalize_amount(groups["lo"]), groups.get("lok"))
+            if groups.get("hi"):
+                j.salary_max = _apply_k(_normalize_amount(groups["hi"]), groups.get("hik"))
             if not j.salary_currency:
-                if re.search(r"€|EUR", whole, re.I):
-                    j.salary_currency = "EUR"
-                elif re.search(r"\$|USD", whole, re.I):
-                    j.salary_currency = "USD"
-                elif re.search(r"£|GBP", whole, re.I):
-                    j.salary_currency = "GBP"
-                elif re.search(r"CHF|Fr\.|SFr\.", whole, re.I):
-                    j.salary_currency = "CHF"
-                elif re.search(r"SEK", whole, re.I):
-                    j.salary_currency = "SEK"
-            if period and not j.salary_period:
-                p = period.lower()
-                if "month" in p or "monat" in p or "mois" in p:
-                    j.salary_period = "month"
-                elif "hour" in p or "hr" in p or "stunde" in p or "heure" in p or "ora" in p:
-                    j.salary_period = "hour"
-                else:
-                    j.salary_period = "year"
+                j.salary_currency = _currency_code(whole)
+            if groups.get("period") and not j.salary_period:
+                j.salary_period = _period_to_unit(groups["period"])
 
     if VISA_RX.search(text) and not j.visa_sponsorship:
         j.visa_sponsorship = "yes"
@@ -1464,19 +1667,8 @@ def _finalize(
     if not j.apply_url:
         j.apply_url = j.job_url
 
-    # Description fallback. Scrape the DOM only when the structured description
-    # is missing or thin, and keep whichever is longer — a terse-but-real
-    # JSON-LD description should not be replaced by page chrome, and page text
-    # should not be discarded when JSON-LD gave us one short sentence.
-    if len(j.description) < MIN_DESCRIPTION_CHARS:
-        for sel in DESCRIPTION_SELECTORS:
-            el = soup.select_one(sel)
-            if el is None:
-                continue
-            txt = el.get_text(" ", strip=True)
-            if len(txt) > len(j.description) and len(txt) > MIN_DESCRIPTION_CHARS:
-                j.description = txt[:10000]
-                break
+    # Idempotent, and already run before the heuristics — see the note there.
+    _apply_description_fallback(j, soup)
 
     # Title fallback
     if not j.title:

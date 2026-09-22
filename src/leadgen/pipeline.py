@@ -14,7 +14,7 @@ from threading import Lock
 
 from .assemble import CompanyContext, build_leads
 from .checkpoint import Checkpoint
-from .person.cascade import resolve_people
+from .person.cascade import resolve_people_detailed
 from .person.register import people_from_register
 from .person.roles import TARGET_FAMILIES
 
@@ -50,7 +50,7 @@ def process_companies(
             with counter_lock:
                 funnel["already_done"] += 1
             return
-        hits = resolve_people(
+        hits, reach = resolve_people_detailed(
             company.domain,
             company.country,
             http,
@@ -79,7 +79,16 @@ def process_companies(
                 hits = found
         if not hits:
             with counter_lock:
-                funnel["no_person_found"] += 1
+                if reach.walled:
+                    # We never saw this company's pages. Filing it under
+                    # "no person found" would be a claim about their website
+                    # that we have no evidence for, and it is the claim that
+                    # sends the next person to debug the team-page parser.
+                    funnel["blocked_no_pages_seen"] += 1
+                elif not reach.saw_content:
+                    funnel["unreachable"] += 1
+                else:
+                    funnel["no_person_found"] += 1
             return
         leads = build_leads(company, hits, smtp=smtp, guess_without_anchor=guess_without_anchor)
         with_email = sum(1 for lead in leads if lead.person_email)

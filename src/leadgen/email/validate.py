@@ -210,9 +210,21 @@ def _mx_host(domain: str) -> str:
     return hosts[0][1] if hosts else ""
 
 
-@lru_cache(maxsize=20000)
-def is_catch_all(domain: str) -> bool | None:
-    """One probe per domain. None means the server refused to tell us."""
+#: SMTP replies that mean "this specific mailbox does not exist". Only these
+#: prove the domain validates per mailbox, which is the entire claim behind an
+#: `email_status` of "verified".
+_NO_SUCH_MAILBOX = frozenset({550, 551, 553})
+
+#: Replies that tell us nothing about mailbox validation. Greylisting (450),
+#: rate limiting (421/451), a refused MAIL FROM (554) and an IP blocklisting
+#: (571) are all the server declining to answer *us*, not a statement about the
+#: recipient. Reading them as "the domain validates" is how a blind guess was
+#: promoted to "verified": every one of these is a non-250, and the old code
+#: tested `code in (250, 251)` and called everything else proof.
+_PROBE_INCONCLUSIVE = frozenset({421, 450, 451, 452, 454, 471, 554, 571, 572})
+
+
+def _probe_catch_all(domain: str) -> bool | None:
     host = _mx_host(domain)
     if not host:
         return None
@@ -220,11 +232,38 @@ def is_catch_all(domain: str) -> bool | None:
         with smtplib.SMTP(host, 25, timeout=SMTP_TIMEOUT) as server:
             server.ehlo_or_helo_if_needed()
             server.mail("verify@example.com")
-            code, _ = server.rcpt(f"{_PROBE_LOCALPART}@{domain}")
-        return code in (250, 251)
+            code, message = server.rcpt(f"{_PROBE_LOCALPART}@{domain}")
     except (smtplib.SMTPException, OSError) as exc:
         log.debug("catch-all probe failed for %s: %s", domain, exc)
         return None
+
+    if code in (250, 251):
+        return True
+    if code in _NO_SUCH_MAILBOX:
+        return False
+    if code in _PROBE_INCONCLUSIVE or 400 <= code < 500:
+        log.debug("catch-all probe for %s was refused with %s — no conclusion", domain, code)
+        return None
+    log.debug("catch-all probe for %s returned an unrecognised %s: %s", domain, code, message)
+    return None
+
+
+_catch_all_cache: dict[str, bool | None] = {}
+
+
+def is_catch_all(domain: str) -> bool | None:
+    """One probe per domain. None means the server refused to tell us.
+
+    Only a definite answer is cached. An inconclusive probe — greylisting, a
+    rate limit, a momentary block — must not pin that domain as unknowable for
+    the rest of a run that may last four hours.
+    """
+    if domain in _catch_all_cache:
+        return _catch_all_cache[domain]
+    verdict = _probe_catch_all(domain)
+    if verdict is not None:
+        _catch_all_cache[domain] = verdict
+    return verdict
 
 
 def validate(email: str, *, smtp: bool = True) -> EmailVerdict:

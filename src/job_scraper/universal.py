@@ -31,21 +31,60 @@ from .models import JobListing
 # Universal HR contact mining
 # ---------------------------------------------------------------------------
 
-# International phone formats — strict enough to avoid false positives.
-# E.164: +<country code 1-3 digits> followed by 6-13 more digits with optional separators.
+# Phone numbers, international and national.
+#
+# The national branch used to read `(?:0\d{1,3}[\s\-.()/]?){2,5}\d{2,4}`, which
+# requires *every* repeated group to begin with a zero. Only the trunk prefix
+# does. The consequence was that the expression matched no national-format
+# European number at all — not "030 12345678", not "044 123 45 67", not
+# "01 42 68 53 00" — while appearing to support them. That is the format a
+# German or Swiss Impressum actually prints, so the contact miner was reduced
+# to the minority of pages that publish an +international number.
+#
+# Now: a leading 0 trunk code, then 6 to 13 further digits with any of the
+# usual separators between them. `_valid_phone` still applies afterwards and
+# rejects the digit blobs (order numbers, dates) that this deliberately lets
+# through.
 PHONE_RX = re.compile(
-    r"(?:\+(?:\d[\s\-\.\(\)]?){6,15}\d|"  # international with +country code
-    r"\b(?:0\d{1,3}[\s\-\.\(\)/]?){2,5}\d{2,4}\b)"  # local with leading 0
+    r"(?:"
+    r"\+\d(?:[\s\-.()/]*\d){6,15}"  # international, +country code
+    r"|"
+    r"(?<![\d.])0\d{1,4}(?:[\s\-.()/]*\d){5,12}(?![\d.])"  # national, leading 0
+    r")"
 )
 # Norway-specific tighter regex (used for de-noising)
 NO_PHONE_RX = re.compile(r"(?:\+47[\s\-]?)?\d{2}[\s\-]?\d{2}[\s\-]?\d{2}[\s\-]?\d{2}\b")
 EMAIL_RX = re.compile(r"\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9\.\-]+\.[A-Za-z]{2,}\b")
 
+# Words that introduce a named contact. The list was English- and
+# Norwegian-shaped, and was missing "Ansprechpartner" — which is simply the
+# German word for this, and the label above the recruiter's name on a large
+# share of DACH job ads and Impressum pages. A German-market scraper that does
+# not match it is not looking where the contacts are. Same for the French,
+# Italian, Dutch and Iberian equivalents.
 CONTACT_KEYWORDS = re.compile(
-    r"\b(kontakt(?:person)?|contact(?:\s+person)?|kontaktperson|"
+    r"\b("
+    # English
+    r"contact(?:\s+person)?|recruiter|recruiting|talent\s+acquisition|"
+    r"hiring\s+manager|questions\s+(?:about|to)|reach\s+out\s+to|get\s+in\s+touch|"
+    # German — "Ansprechpartner(in)" is the common one, gendered forms included
+    r"ansprechpartner(?:in)?|ansprechperson|kontaktperson|kontakt|"
+    r"ihre?\s+ansprechpartner(?:in)?|bei\s+fragen|fragen\s+zur?\s+\w+|"
+    r"personalabteilung|personalreferent(?:in)?|recruiterin|"
+    # French
+    r"interlocut(?:eur|rice)|personne\s+de\s+contact|votre\s+contact|"
+    r"charg[ée]e?\s+de\s+recrutement|pour\s+(?:toute\s+)?(?:question|renseignement)|"
+    # Italian
+    r"referente|persona\s+di\s+contatto|per\s+informazioni|responsabile\s+selezione|"
+    # Spanish / Portuguese
+    r"persona\s+de\s+contacto|contacto|responsable\s+de\s+selecci[óo]n|" r"pessoa\s+de\s+contacto|"
+    # Dutch
+    r"contactpersoon|voor\s+vragen|neem\s+contact\s+op|"
+    # Nordic
     r"for\s+spørsmål|ved\s+spørsmål|spørsmål\s+(?:om|kan\s+rettes\s+til)|"
-    r"kontaktperson(?:er)?|HR-kontakt|recruiter|hiring\s+manager|"
-    r"questions\s+(?:about|to)|reach\s+out\s+to)\b",
+    r"HR-kontakt|kontaktperson(?:er)?|kontaktpersoon|"
+    r"for\s+spørgsmål|vid\s+frågor|kontaktuppgifter|yhteyshenkilö"
+    r")\b",
     re.I,
 )
 
@@ -57,6 +96,108 @@ JUNK_EMAIL_HOSTS = re.compile(
     r"localhost|test\.|dev\.|finn\.no|nav\.no|jobsense\.io|jobbnorge\.no)",
     re.I,
 )
+
+#: Mailboxes belonging to the *operator of the board*, never to the employer.
+#: jobs.ch is run by JobCloud AG, and `service@jobcloud.ch` is the only address
+#: on a jobs.ch detail page — so the recruiter-flavour regex below matched the
+#: "job" inside "jobcloud" and every single exported row carried JobCloud's
+#: customer-service desk as the recruiter's address. A lead list whose contact
+#: column is one company's support inbox is worse than an empty one: it gets
+#: sent to.
+OPERATOR_EMAIL_HOSTS = re.compile(
+    r"@([a-z0-9-]+\.)?("
+    r"jobcloud\.(ch|com)|jobs\.ch|jobup\.ch|jobscout24\.ch|"
+    r"schibsted\.(com|no)|finn\.no|"
+    r"stepstone\.(de|at|be|nl|com)|totaljobs\.com|"
+    r"indeed\.com|glassdoor\.com|linkedin\.com|xing\.com|kununu\.com|"
+    r"monster\.(com|de|fr|ch)|"
+    r"arbeitsagentur\.de|nav\.no|arbetsformedlingen\.se|"
+    r"karriere\.at|willhaben\.at|"
+    r"jobbsafari\.(no|se)|karrierestart\.no|"
+    r"welcometothejungle\.com|hellowork\.com|apec\.fr|"
+    r"infojobs\.(net|it)|pracuj\.pl|nofluffjobs\.com|"
+    r"adzuna\.(com|de|co\.uk)|talent\.com|jooble\.org|jobrapido\.com"
+    r")$",
+    re.I,
+)
+
+#: Navigation and UI vocabulary. A "name" built entirely out of these is the
+#: page's own chrome — "Recruiter Area Deutsch Français English Login" shipped
+#: as a person's name for an entire jobs.ch run, from this code path, after the
+#: equivalent guard had been added to extract.py only.
+_UI_VOCABULARY: frozenset[str] = frozenset(
+    {
+        "recruiter",
+        "area",
+        "login",
+        "logout",
+        "register",
+        "sitemap",
+        "nettstedkart",
+        "deutsch",
+        "francais",
+        "français",
+        "english",
+        "italiano",
+        "espanol",
+        "español",
+        "nederlands",
+        "norsk",
+        "svenska",
+        "dansk",
+        "suomi",
+        "polski",
+        "menu",
+        "home",
+        "search",
+        "suche",
+        "kontakt",
+        "contact",
+        "impressum",
+        "datenschutz",
+        "privacy",
+        "cookies",
+        "newsletter",
+        "jobs",
+        "karriere",
+        "career",
+        "careers",
+        "company",
+        "unternehmen",
+        "about",
+        "vis",
+        "mer",
+        "more",
+        "share",
+        "teilen",
+        "apply",
+        "bewerben",
+        "account",
+        "profile",
+        "profil",
+        "dashboard",
+        "settings",
+        "help",
+        "hilfe",
+        "support",
+        "faq",
+        "blog",
+        "news",
+        "press",
+        "presse",
+        "terms",
+        "agb",
+    }
+)
+
+
+def _is_ui_vocabulary(text: str) -> bool:
+    """True when every word of `text` is site furniture rather than a name."""
+    words = [w for w in re.split(r"[^\wÀ-ÿ]+", (text or "").lower()) if w]
+    if not words:
+        return True
+    return all(word in _UI_VOCABULARY for word in words)
+
 
 ATS_HOSTS = re.compile(
     r"(refline\.ch|smartrecruiters\.com|greenhouse\.io|lever\.co|workable\.com|"
@@ -113,13 +254,18 @@ def mine_contacts(html: str, *, country_hint: str | None = None) -> dict[str, st
     body_text = soup.get_text(" ", strip=True)
     out: dict[str, str] = {}
 
-    # Email: all valid, drop junk hosts
-    emails: list[str] = []
-    for em in EMAIL_RX.findall(html):
-        if JUNK_EMAIL_HOSTS.search(em):
-            continue
-        if em.lower() not in (e.lower() for e in emails):
-            emails.append(em)
+    # Scope: the posting's own content, not the whole document. Scanning the
+    # raw HTML meant the footer, the cookie banner and the board operator's own
+    # support address all competed for "the recruiter's email" on equal terms
+    # with anything the employer actually wrote — and on a jobs.ch page the
+    # operator's address is the only one there.
+    content_node = _main_content_node(soup)
+    contact_block = _find_contact_section(soup)
+    scoped_html = (str(content_node) if content_node is not None else "") + " " + (contact_block or "")
+    scoped_text = content_node.get_text(" ", strip=True) if content_node is not None else body_text
+
+    # Email: all valid, drop junk hosts and the board operator's own mailboxes.
+    emails = _mine_emails(scoped_html) or _mine_emails(html)
     if emails:
         # Prefer recruiter-flavored emails
         recruiter = next(
@@ -134,13 +280,25 @@ def mine_contacts(html: str, *, country_hint: str | None = None) -> dict[str, st
             out["recruiter_email"] = recruiter
         out["application_email"] = recruiter or emails[0]
 
-    # Phone: rely on country regex first, fall back to international
-    phones: list[str] = []
+    # Phone: rely on country regex first, fall back to international.
+    #
+    # The validity checks are split deliberately. The "this is a bare digit
+    # blob, probably a reference ID" and "this is a date" rules can only be
+    # judged on the RAW substring: after normalisation every national number
+    # *is* a bare digit blob, so running that rule afterwards rejected 100% of
+    # the 9-12 digit national numbers that make up most of Europe.
+    raw_phones: list[str] = []
     if country_hint == "NO":
-        phones = [_normalize_phone(p) for p in NO_PHONE_RX.findall(body_text)]
-    if not phones:
-        phones = [_normalize_phone(p) for p in PHONE_RX.findall(body_text)]
-    phones = [p for p in phones if _valid_phone(p)]
+        raw_phones = list(NO_PHONE_RX.findall(scoped_text or body_text))
+    if not raw_phones:
+        raw_phones = list(PHONE_RX.findall(scoped_text or body_text))
+    if not raw_phones and scoped_text != body_text:
+        raw_phones = list(PHONE_RX.findall(body_text))
+    phones = [
+        _normalize_phone(raw)
+        for raw in raw_phones
+        if _plausible_raw_phone(raw) and _valid_phone(_normalize_phone(raw))
+    ]
     phones = _uniq_preserve(phones)
     if phones:
         out["application_phone"] = phones[0]
@@ -167,6 +325,7 @@ def mine_contacts(html: str, *, country_hint: str | None = None) -> dict[str, st
             name
             and len(name.split()) >= 2
             and not re.search(r"(personvern|cookies|tilgjengeligh)", name, re.I)
+            and not _is_ui_vocabulary(name)
         ):
             out["recruiter_name"] = name
             if role and len(role) >= 3:
@@ -231,15 +390,21 @@ def mine_contacts(html: str, *, country_hint: str | None = None) -> dict[str, st
                     continue
                 out["recruiter_name"] = cand
                 break
-        # Section-local phone/email
+        # Section-local phone/email. Same split as above: the blob and date
+        # rules are judged on the raw substring, the length rule on the
+        # normalised number.
+        sec_raw = NO_PHONE_RX.findall(section) if country_hint == "NO" else PHONE_RX.findall(section)
         sec_phones = [
-            _normalize_phone(p)
-            for p in (NO_PHONE_RX.findall(section) if country_hint == "NO" else PHONE_RX.findall(section))
+            _normalize_phone(raw)
+            for raw in sec_raw
+            if _plausible_raw_phone(raw) and _valid_phone(_normalize_phone(raw))
         ]
-        sec_phones = [p for p in sec_phones if _valid_phone(p)]
         if sec_phones:
             out["recruiter_phone"] = sec_phones[0]
-        sec_emails = [e for e in EMAIL_RX.findall(section) if not JUNK_EMAIL_HOSTS.search(e)]
+        # `_mine_emails`, not a local filter: this branch is what actually set
+        # `recruiter_email` on a jobs.ch page, so filtering operator mailboxes
+        # only at the top of the function fixed nothing.
+        sec_emails = _mine_emails(section)
         if sec_emails:
             out["recruiter_email"] = sec_emails[0]
     return out
@@ -338,20 +503,44 @@ def _normalize_phone(raw: str) -> str:
 _DATE_LIKE_RX = re.compile(r"^\d{1,4}[\./\-]\d{1,4}[\./\-]\d{2,4}$")
 
 
+def _plausible_raw_phone(raw: str) -> bool:
+    """Judge the substring as it appeared on the page.
+
+    Both rules here depend on the original formatting and become meaningless
+    once separators are stripped: a normalised "0442151578" is indistinguishable
+    from a reference number, so applying this test after normalisation rejected
+    every national-format European number in the 9-12 digit band.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return False
+    # A run of digits with no separator at all, and no country prefix, is far
+    # more likely a reference or an order number than a phone number.
+    if re.fullmatch(r"\d{9,12}", raw):
+        return False
+    return not _DATE_LIKE_RX.match(raw)
+
+
 def _valid_phone(p: str) -> bool:
+    """Judge the normalised number: length and obvious filler only."""
     p = p.strip()
     digits = re.sub(r"\D", "", p)
     if len(digits) < 8 or len(digits) > 15:
         return False
     if digits == digits[0] * len(digits):
         return False
-    if digits in ("1234567", "12345678", "123456789", "12345678901"):
-        return False
-    # Pure digit blob — likely ID
-    if re.fullmatch(r"\d{9,12}", p):
-        return False
-    # Date string
-    return not _DATE_LIKE_RX.match(p)
+    return digits not in ("1234567", "12345678", "123456789", "12345678901")
+
+
+def _mine_emails(markup: str) -> list[str]:
+    """Distinct addresses in `markup`, operator and junk mailboxes removed."""
+    found: list[str] = []
+    for address in EMAIL_RX.findall(markup or ""):
+        if JUNK_EMAIL_HOSTS.search(address) or OPERATOR_EMAIL_HOSTS.search(address):
+            continue
+        if address.lower() not in (existing.lower() for existing in found):
+            found.append(address)
+    return found
 
 
 def _uniq_preserve(items: list[str]) -> list[str]:
@@ -1066,18 +1255,86 @@ def _looks_like_job_page(soup: BeautifulSoup, page_url: str) -> bool:
     if any(t in path for t in ("/job", "/stilling", "/career", "/vacancy", "/joboffer", "/ad/")):
         return True
     text = soup.get_text(" ", strip=True).lower()
-    signals = [
+    # The vocabulary was English plus a little German and Norwegian, needing two
+    # hits to pass. A French, Italian, Spanish or Dutch posting scores zero on
+    # it, so `universal_extract` returned None for the page and every field it
+    # would have filled was lost — on a Europe-wide run, that is most of the
+    # continent. Each market gets enough terms here that an ordinary posting
+    # clears the same two-signal bar an English one does.
+    signals = (
+        # English
         "apply",
         "responsibilities",
         "requirements",
         "qualifications",
+        "what you'll do",
+        "about the role",
+        "we offer",
+        "your profile",
+        # German
+        "aufgaben",
+        "anforderungen",
+        "dein profil",
+        "ihr profil",
+        "wir bieten",
+        "bewerbung",
+        "stellenangebot",
+        "stellenbeschreibung",
+        "jetzt bewerben",
+        "das bringst du mit",
+        "deine aufgaben",
+        "unser angebot",
+        "vollzeit",
+        "teilzeit",
+        # French
+        "missions",
+        "profil recherché",
+        "votre profil",
+        "candidature",
+        "postuler",
+        "nous offrons",
+        "compétences",
+        "description du poste",
+        "temps plein",
+        # Italian
+        "mansioni",
+        "requisiti",
+        "competenze",
+        "candidatura",
+        "candidarsi",
+        "descrizione del ruolo",
+        "offriamo",
+        "tempo pieno",
+        # Spanish
+        "funciones",
+        "requisitos",
+        "se ofrece",
+        "perfil",
+        "candidatura",
+        "descripción del puesto",
+        "jornada completa",
+        # Dutch
+        "taken",
+        "vereisten",
+        "functieomschrijving",
+        "solliciteren",
+        "wij bieden",
+        "jouw profiel",
+        "fulltime",
+        # Nordic
         "søk",
         "stillingen",
         "arbeidsgiver",
-        "aufgaben",
-        "anforderungen",
-        "deine aufgaben",
-    ]
+        "søknadsfrist",
+        "arbeidsoppgaver",
+        "ansök",
+        "arbetsuppgifter",
+        "kvalifikationer",
+        "ansøgning",
+        "arbejdsopgaver",
+        "hakuaika",
+        "työtehtävät",
+    )
     return sum(1 for s in signals if s in text) >= 2
 
 
