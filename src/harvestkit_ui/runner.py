@@ -39,9 +39,10 @@ from typing import Any, Optional
 #: INFO; older lines are on disk in the log file either way.
 MAX_LINES = 10000
 
-#: What each exit code means, in the words the operator needs. The numbers are
-#: the CLI's, and it matters that 2 and 4 are not confused: "the market was
-#: thin" and "we were blocked out of every site" look identical in a CSV.
+#: What each exit code means **for a harvest**, in the words the operator
+#: needs. The numbers are the CLI's, and it matters that 2 and 4 are not
+#: confused: "the market was thin" and "we were blocked out of every site" look
+#: identical in a CSV.
 EXIT_MEANING: dict[int, tuple[str, str]] = {
     0: ("ok", "Finished. The file is ready."),
     2: (
@@ -56,6 +57,30 @@ EXIT_MEANING: dict[int, tuple[str, str]] = {
         "empty market. Run the egress check, and set up a proxy before trying again.",
     ),
 }
+
+#: The same, for a check. A check produces a verdict, not a file, and saying
+#: "Finished. The file is ready." after the health check was both wrong and
+#: confusing — it is the one job that writes nothing at all.
+CHECK_EXIT_MEANING: dict[int, tuple[str, str]] = {
+    0: ("ok", "All good. Nothing here will stop this machine working."),
+    1: ("error", "Something needs attention — the log below says what, and how to fix it."),
+    2: ("short", "Finished with warnings. Read the log."),
+}
+
+
+def meaning(exit_code: int, kind: str) -> tuple[str, str]:
+    """(status, sentence) for an exit code, in this job's own vocabulary."""
+    table = CHECK_EXIT_MEANING if kind == "check" else EXIT_MEANING
+    fallback = (
+        "error",
+        (
+            f"The check ended with exit code {exit_code}."
+            if kind == "check"
+            else f"The run ended with exit code {exit_code}."
+        ),
+    )
+    return table.get(exit_code, fallback)
+
 
 _SEED_TOTAL = re.compile(r"seed: (\d+) listings total")
 _SEED_COMPANIES = re.compile(r"seed: (\d+) unique companies")
@@ -73,6 +98,8 @@ class RunState:
 
     id: str = ""
     label: str = ""
+    #: "harvest" or "check" — decides which vocabulary reports this run.
+    kind: str = "harvest"
     command: list[str] = field(default_factory=list)
     started_at: float = 0.0
     finished_at: float = 0.0
@@ -96,6 +123,7 @@ class RunState:
         return {
             "id": self.id,
             "label": self.label,
+            "kind": self.kind,
             "command": " ".join(shlex.quote(part) for part in self.command),
             "status": self.status,
             "message": self.message,
@@ -178,7 +206,14 @@ class Runner:
 
     # -- lifecycle ---------------------------------------------------------
 
-    def start(self, command: list[str], *, label: str, output_path: str = "") -> dict[str, Any]:
+    def start(
+        self,
+        command: list[str],
+        *,
+        label: str,
+        output_path: str = "",
+        kind: str = "harvest",
+    ) -> dict[str, Any]:
         with self._lock:
             if self.running:
                 raise RuntimeError("a run is already in progress")
@@ -187,6 +222,7 @@ class Runner:
             self.state = RunState(
                 id=run_id,
                 label=label,
+                kind=kind,
                 command=command,
                 started_at=time.time(),
                 status="running",
@@ -280,7 +316,7 @@ class Runner:
             self.state.exit_code = code
             self.state.finished_at = time.time()
             if self.state.status != "stopped":
-                status, message = EXIT_MEANING.get(code, ("error", f"The run ended with exit code {code}."))
+                status, message = meaning(code, self.state.kind)
                 self.state.status = status
                 if self.state.message.startswith("HARVEST FAILED"):
                     message = f"{message}\n{self.state.message}"

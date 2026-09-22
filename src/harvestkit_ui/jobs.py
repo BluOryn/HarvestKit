@@ -55,6 +55,14 @@ class Job:
     long_running: bool = True
     #: Field whose value names the file the run produces, for the results table.
     output_field: str = ""
+    #: What this job *is*, which decides the words used to report it.
+    #:
+    #: A harvest produces listings, companies, people and a file. A check
+    #: produces a verdict. Reporting a check with the harvest's vocabulary is
+    #: how running the health check came back reading "0 listings seeded,
+    #: 0 companies, 0 people found — Finished. The file is ready." Every number
+    #: was correct and the whole thing was nonsense.
+    kind: str = "harvest"  # harvest | check
 
 
 def _config_choices(root: Path, pattern: str) -> list[str]:
@@ -346,6 +354,7 @@ JOBS_JOB = Job(
 )
 
 DOCTOR_JOB = Job(
+    kind="check",
     key="doctor",
     title="Check this machine",
     blurb=(
@@ -370,6 +379,7 @@ DOCTOR_JOB = Job(
 )
 
 EGRESS_JOB = Job(
+    kind="check",
     key="egress",
     title="Check this machine can read European sites",
     blurb=(
@@ -383,6 +393,7 @@ EGRESS_JOB = Job(
 )
 
 PROXY_JOB = Job(
+    kind="check",
     key="proxies",
     title="Find and test free proxies",
     blurb=(
@@ -423,6 +434,7 @@ PROXY_JOB = Job(
 )
 
 VERIFY_JOB = Job(
+    kind="check",
     key="verify",
     title="Check a finished file",
     blurb=(
@@ -480,6 +492,7 @@ def describe(root: Path) -> list[dict[str, Any]]:
                 "fields": fields,
                 "long_running": job.long_running,
                 "output_field": job.output_field,
+                "kind": job.kind,
             }
         )
     return out
@@ -510,8 +523,16 @@ def build_command(job: Job, values: dict[str, Any], python: str, root: Path) -> 
         if not spec.flag:
             positional.append(str(value))
             continue
-        if not spec.always and str(value) == str(spec.default):
-            continue
+        # Emit every non-empty value, even one that equals the field's default.
+        #
+        # Skipping defaults looked like tidiness and was a live bug: the panel's
+        # default for `search_keywords` is `configs/leads/keywords.txt` while
+        # the CLI's is `""`, so the flag was dropped for matching "the default"
+        # — and every seeding branch in the CLI is gated on a seed flag being
+        # present. The shipped form therefore ran with no seed source at all
+        # and reported `seed: 0 listings total`, which is the exact failure the
+        # runbook warns about. Any field whose panel default differs from the
+        # CLI's had the same hole. The command is longer and says what it does.
         if str(value) == "":
             continue
         command.extend([spec.flag, str(value)])

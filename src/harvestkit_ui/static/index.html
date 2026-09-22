@@ -357,6 +357,11 @@
       holder.id = "progressCard";
       $("tab-run").prepend(holder);
     }
+    // A check produces a verdict, not a harvest. Showing it the harvest
+    // scoreboard reported the health check as "0 listings seeded, 0 companies,
+    // 0 people found" — every number correct, the whole thing nonsense, and it
+    // read as though the scraper had found nothing.
+    const isHarvest = state.kind !== "check";
     const funnel = state.funnel || {};
     const stats = [
       ["Listings seeded", state.listings],
@@ -369,11 +374,16 @@
     holder.innerHTML =
       `<h2>${esc(state.label || "Run")}</h2>` +
       `<div class="notice ${noticeClass}">${esc(state.message || "")}</div>` +
-      `<div class="stats">${stats.map(([k, n]) =>
-        `<div class="stat"><div class="n">${Number(n || 0).toLocaleString()}</div><div class="k">${esc(k)}</div></div>`
-      ).join("")}</div>` +
-      (state.reachability ? `<div class="notice info"><strong>Reachability</strong> — ${esc(state.reachability)}</div>` : "") +
-      (state.output_path && !state.running ? `<div class="actions"><a class="ghost" href="/api/download?path=${encodeURIComponent(relative(state.output_path))}&token=${encodeURIComponent(TOKEN)}" download>Download the file</a></div>` : "");
+      (isHarvest
+        ? `<div class="stats">${stats.map(([k, n]) =>
+            `<div class="stat"><div class="n">${Number(n || 0).toLocaleString()}</div><div class="k">${esc(k)}</div></div>`
+          ).join("")}</div>`
+        : "") +
+      (isHarvest && state.reachability ? `<div class="notice info"><strong>Reachability</strong> — ${esc(state.reachability)}</div>` : "") +
+      (isHarvest && state.output_path && !state.running ? `<div class="actions"><a class="ghost" href="/api/download?path=${encodeURIComponent(relative(state.output_path))}&token=${encodeURIComponent(TOKEN)}" download>Download the file</a></div>` : "") +
+      (isHarvest ? "" : `<div class="actions"><button class="ghost" data-goto-log>Read the full output</button></div>`);
+    const toLog = holder.querySelector("[data-goto-log]");
+    if (toLog) toLog.onclick = () => selectTab("log");
   }
 
   function relative(path) {

@@ -197,3 +197,72 @@ def test_the_log_window_never_hands_back_lines_it_has_dropped(tmp_path):
 def test_state_serialises_to_json_for_the_browser(tmp_path):
     runner = Runner(tmp_path, tmp_path / "runs")
     json.dumps(runner.snapshot())  # must not raise
+
+
+# ------------------------------------------------- the shipped form must work
+
+
+def test_the_default_form_carries_a_seed_source():
+    """The bug that made the panel's own default produce `seed: 0 listings`.
+
+    Every seeding branch in the CLI is gated on a seed flag being *present*.
+    `build_command` used to skip any flag whose value equalled the field's
+    default — and the panel's default for `search_keywords` is a real file
+    while the CLI's is `""`, so the one flag that decides whether anything is
+    harvested at all was the one silently dropped.
+    """
+    leads = catalogue.JOBS["leads"]
+    untouched = {item.name: item.default for item in leads.fields}
+    command = catalogue.build_command(leads, untouched, "python", ROOT)
+
+    seed_flags = {"--search-keywords", "--boards", "--jobsch-pages", "--arbeitnow-pages"}
+    assert seed_flags & set(command), "the shipped form must seed something"
+    assert "--search-keywords" in command
+    assert command[command.index("--search-keywords") + 1] == "configs/leads/keywords.txt"
+
+
+def test_a_value_equal_to_its_default_is_still_passed():
+    command = build("leads", {"countries": "eu", "target": 300})
+    assert command[command.index("--countries") + 1] == "eu"
+    assert command[command.index("--target") + 1] == "300"
+
+
+# ------------------------------------------------ a check is not a harvest
+
+
+def test_checks_and_harvests_are_labelled_as_what_they_are():
+    assert catalogue.JOBS["leads"].kind == "harvest"
+    assert catalogue.JOBS["jobs"].kind == "harvest"
+    for key in ("doctor", "egress", "proxies", "verify"):
+        assert catalogue.JOBS[key].kind == "check", key
+
+
+def test_a_check_is_not_reported_in_the_harvests_vocabulary():
+    """Running the health check reported "Finished. The file is ready." over a
+    row of zeroes — every number correct, and the whole thing nonsense, because
+    a check writes no file and seeds no listings."""
+    from harvestkit_ui.runner import meaning
+
+    check_status, check_message = meaning(0, "check")
+    harvest_status, harvest_message = meaning(0, "harvest")
+    assert check_status == harvest_status == "ok"
+    assert check_message != harvest_message
+    assert "file" not in check_message.lower()
+
+    # A failing check is an error, not a "shortfall".
+    assert meaning(1, "check")[0] == "error"
+
+
+def test_the_kind_reaches_the_browser(tmp_path):
+    from harvestkit_ui.runner import Runner, RunState
+
+    runner = Runner(tmp_path, tmp_path / "runs")
+    runner.state = RunState(kind="check", label="Check this machine")
+    assert runner.snapshot()["kind"] == "check"
+
+
+def test_the_page_only_shows_the_scoreboard_for_a_harvest():
+    """The fix lives in the page, so the page is where it has to be asserted."""
+    page = (ROOT / "src" / "harvestkit_ui" / "static" / "index.html").read_text(encoding="utf-8")
+    assert 'state.kind !== "check"' in page
+    assert "isHarvest" in page

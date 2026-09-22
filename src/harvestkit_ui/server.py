@@ -307,7 +307,7 @@ class Handler(BaseHTTPRequestHandler):
         # Remember the form so tomorrow is one click.
         self.app.save_settings({f"form:{key}": values})
         try:
-            state = self.app.runner.start(command, label=job.title, output_path=output)
+            state = self.app.runner.start(command, label=job.title, output_path=output, kind=job.kind)
         except RuntimeError as exc:
             return self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
         return self._json(state)
