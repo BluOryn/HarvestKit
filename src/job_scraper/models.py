@@ -15,7 +15,6 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 # Query params that identify a marketing campaign, not a resource. Stripped before
 # fingerprinting so the same posting reached from a newsletter and from search
@@ -41,23 +40,95 @@ TRACKING_PARAMS = frozenset(
 )
 
 
+#: Ports that are implied by the scheme and therefore never part of the
+#: canonical form. `https://acme.de:443/x` and `https://acme.de/x` are the same
+#: page, and splitting them produced two rows for one posting.
+_DEFAULT_PORTS: dict[str, str] = {"http": "80", "https": "443"}
+
+
+def _strip_tracking(query: str) -> str:
+    """Remove tracking parameters, preserving order and original encoding.
+
+    Deliberately a string operation rather than parse_qsl + urlencode. A
+    round-trip through those re-encodes what it keeps — `+` becomes `%2B`,
+    `%20` becomes `+` — so two spellings of the same URL came out differently
+    depending on which side had touched it.
+    """
+    if not query:
+        return ""
+    kept = []
+    for piece in query.split("&"):
+        if not piece:
+            continue
+        key = piece.split("=", 1)[0]
+        if key.lower() in TRACKING_PARAMS:
+            continue
+        kept.append(piece)
+    return "&".join(kept)
+
+
+def _normalise_authority(authority: str, scheme: str) -> str:
+    """Lowercase the host and drop a default port. Userinfo is left alone."""
+    userinfo, _, hostport = authority.rpartition("@")
+    userinfo = f"{userinfo}@" if userinfo else ""
+    host, port = hostport, ""
+    if hostport.startswith("["):  # IPv6 literal, which contains colons itself
+        close = hostport.find("]")
+        if close >= 0:
+            host = hostport[: close + 1]
+            tail = hostport[close + 1 :]
+            port = tail[1:] if tail.startswith(":") else ""
+    elif ":" in hostport:
+        host, _, port = hostport.rpartition(":")
+    host = host.lower()
+    if port and port == _DEFAULT_PORTS.get(scheme, ""):
+        port = ""
+    return userinfo + (f"{host}:{port}" if port else host)
+
+
 def canonicalize_url(url: str) -> str:
     """Strip fragment + tracking params and normalise the trailing slash.
 
     Used for both dedupe keys and the `id` column, so the CSV `id` and the
     in-memory dedupe key are always derived from the same string.
+
+    **This must produce byte-identical output to `canonicalizeUrl` in
+    extension/app/src/lib/canonicalUrl.ts.** Both halves write into the same
+    `id` column, so any divergence silently splits one posting into two rows.
+    The shared cases live in extension/tests/canonical-vectors.json and are
+    asserted by pytest and by the extension's own suite; add a case there
+    before changing anything here.
+
+    The canonical form is defined as only the operations both languages can
+    perform identically on the raw string: lowercase the scheme and host, drop
+    a default port, drop the fragment, drop tracking parameters, strip trailing
+    slashes. The path and the surviving query keep their original bytes and
+    original percent-encoding — normalising those was what made
+    `/stellen/bürokauffrau-münchen` two different ids.
     """
     if not url:
         return ""
-    try:
-        parsed = urlparse(url.strip())
-    except ValueError:
-        return url.strip()
-    query = [
-        (k, v) for k, v in parse_qsl(parsed.query, keep_blank_values=True) if k.lower() not in TRACKING_PARAMS
-    ]
-    normalized = parsed._replace(fragment="", query=urlencode(query, doseq=True))
-    return urlunparse(normalized).rstrip("/")
+    working = url.strip()
+    if not working:
+        return ""
+
+    working = working.split("#", 1)[0]
+    query = ""
+    if "?" in working:
+        working, _, query = working.partition("?")
+    query = _strip_tracking(query)
+
+    match = re.match(r"^([a-zA-Z][a-zA-Z0-9+.\-]*)://(.*)$", working, re.S)
+    if match:
+        scheme = match.group(1).lower()
+        rest = match.group(2)
+        cut = re.search(r"[/?]", rest)
+        index = cut.start() if cut else len(rest)
+        authority, path = rest[:index], rest[index:]
+        working = f"{scheme}://{_normalise_authority(authority, scheme)}{path}"
+
+    out = f"{working}?{query}" if query else working
+    return out.rstrip("/")
 
 
 # Mirror of extension/app/src/lib/schema.ts JOB_FIELDS — order matters (CSV columns).
