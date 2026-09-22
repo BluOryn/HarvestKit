@@ -30,6 +30,7 @@ import socket
 import sqlite3
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -50,10 +51,19 @@ class Check:
 @dataclass
 class Report:
     checks: list[Check] = field(default_factory=list)
+    #: Called with each check the moment it completes.
+    #:
+    #: The browser launch takes several seconds and reading eight European
+    #: sites takes twenty, so printing the whole report at the end meant the
+    #: control panel showed an empty box for the entire run and looked hung.
+    #: A check is finished when it is added; there is no reason to sit on it.
+    on_check: Callable[[Check], None] | None = None
 
     def add(self, name: str, status: str, detail: str = "", fix: str = "") -> Check:
         check = Check(name, status, detail, fix)
         self.checks.append(check)
+        if self.on_check is not None:
+            self.on_check(check)
         return check
 
     @property
@@ -443,6 +453,29 @@ def check_csv_safety(report: Report) -> None:
 # ------------------------------------------------------------------- output
 
 
+#: Column width for the check name. Fixed rather than computed, because the
+#: lines are now printed as they happen and the longest name is not yet known.
+_NAME_WIDTH = 24
+
+
+def render_check(check: Check, *, use_colour: bool = False) -> None:
+    """Print one finished check. Flushed, so a pipe sees it immediately."""
+    tag = check.status
+    if use_colour:
+        tag = f"{_COLOUR[check.status]}{check.status}\033[0m"
+    print(f"  {tag:<6} {check.name:<{_NAME_WIDTH}} {check.detail}", flush=True)
+    if check.fix and check.status != OK:
+        for line in _wrap(check.fix, 66):
+            print(f"         {' ' * _NAME_WIDTH} {line}", flush=True)
+
+
+_COLOUR = {
+    OK: "\033[32m",
+    WARN: "\033[33m",
+    FAIL: "\033[31m",
+}
+
+
 def render(report: Report) -> None:
     width = max(len(check.name) for check in report.checks) + 2
     colour = {
@@ -497,6 +530,14 @@ def main(argv: list[str] | None = None) -> int:
     report = Report()
     started = time.time()
 
+    # JSON callers want one parseable object, so streaming is off there.
+    if not args.json:
+        use_colour = sys.stdout.isatty() and os.name != "nt"
+        print()
+        print("  HarvestKit health check")
+        print("  " + "=" * 74, flush=True)
+        report.on_check = lambda check: render_check(check, use_colour=use_colour)
+
     check_python(report)
     check_dependencies(report)
     check_writable(report)
@@ -524,7 +565,15 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
     else:
-        render(report)
+        # Every line is already out; only the verdict is left.
+        print("  " + "=" * 74)
+        if report.failed:
+            print(f"  {report.failed} thing(s) will stop this machine producing leads.")
+        elif report.warned:
+            print(f"  Everything essential works. {report.warned} thing(s) would make it better.")
+        else:
+            print("  Everything checks out. This machine is ready to run.")
+        print()
     return 1 if report.failed else 0
 
 

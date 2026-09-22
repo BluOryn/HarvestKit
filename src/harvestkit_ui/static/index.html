@@ -72,15 +72,19 @@
 
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
   label.field { display: block; }
-  label.field > span.name { display: block; font-weight: 600; font-size: 13.5px; margin-bottom: 4px; }
-  label.field > span.hint { display: block; color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+  /* Not a child combinator: a toggle nests both spans inside a wrapper so the
+     checkbox can sit beside them, and `label.field > span.name` therefore did
+     not match — the label and its help text ran together into one sentence. */
+  label.field span.name { display: block; font-weight: 600; font-size: 13.5px; margin-bottom: 4px; }
+  label.field span.hint { display: block; color: var(--muted); font-size: 12.5px; margin-top: 4px; }
   input[type=text], input[type=number], select, textarea {
     width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px;
     background: var(--bg); color: var(--ink); font: inherit;
   }
   textarea { min-height: 130px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
   label.toggle { display: flex; gap: 9px; align-items: flex-start; }
-  label.toggle input { margin-top: 3px; }
+  label.toggle input { margin-top: 3px; flex: none; }
+  label.toggle span.name { margin-bottom: 2px; }
 
   details.more { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
   details.more > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; color: var(--muted); }
@@ -388,6 +392,11 @@
 
   function colour(line) {
     const safe = esc(line);
+    // The health check writes its verdict in the first column, so match that
+    // before anything else — a FAIL line also contains the word it failed on.
+    if (/^\s{2}FAIL\s/.test(line)) return `<span class="err">${safe}</span>`;
+    if (/^\s{2}WARN\s/.test(line)) return `<span class="warn">${safe}</span>`;
+    if (/^\s{2}OK\s/.test(line)) return `<span class="good">${safe}</span>`;
     if (/ERROR|FAILED|Traceback|refusing/i.test(line)) return `<span class="err">${safe}</span>`;
     if (/WARNING|blocked|short of/i.test(line)) return `<span class="warn">${safe}</span>`;
     if (/reachability:|funnel:|wrote \d+ rows|All hard guarantees/i.test(line)) return `<span class="good">${safe}</span>`;
