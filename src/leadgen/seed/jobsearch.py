@@ -43,6 +43,17 @@ SMARTRECRUITERS_URL = "https://jobs.smartrecruiters.com/sr-jobs/search"
 MAX_PAGES = 25
 SMARTRECRUITERS_LIMIT = 100
 
+#: The documented per-company postings API. Unlike `sr-jobs/search`, this one
+#: honours `offset` — verified live: Quadient1 returns rows at offset 0 and an
+#: empty page past `totalFound`, with the offset echoed back correctly.
+SMARTRECRUITERS_POSTINGS_URL = "https://api.smartrecruiters.com/v1/companies/{slug}/postings"
+#: Public posting page, for the rows the postings API returns without one.
+SMARTRECRUITERS_JOB_URL = "https://jobs.smartrecruiters.com/{slug}/{job_id}"
+#: How many distinct employers one keyword sweep may expand. Each costs a
+#: request per 100 postings, so this bounds the sweep rather than the market.
+SMARTRECRUITERS_MAX_COMPANIES = 120
+SMARTRECRUITERS_MAX_PAGES_PER_COMPANY = 5
+
 _TAG_RX = re.compile(r"<[^>]+>")
 _WS_RX = re.compile(r"\s+")
 
@@ -172,14 +183,89 @@ def _smartrecruiters_listing(job: dict) -> JobListing | None:
     )
 
 
+def _smartrecruiters_posting(job: dict, slug: str) -> JobListing | None:
+    """A row from the per-company postings API, which carries no applyUrl."""
+    listing = _smartrecruiters_listing(job)
+    if listing is None:
+        return None
+    if not listing.job_url:
+        job_id = str(job.get("id") or "").strip()
+        if not job_id:
+            return None
+        url = canonicalize_url(SMARTRECRUITERS_JOB_URL.format(slug=slug, job_id=job_id))
+        listing.job_url = url
+        listing.apply_url = url
+    return listing
+
+
+def _smartrecruiters_company(http, slug: str) -> list:
+    """Every open posting for one employer, paginated properly."""
+    found: list[JobListing] = []
+    offset = 0
+    for _ in range(SMARTRECRUITERS_MAX_PAGES_PER_COMPANY):
+        url = f"{SMARTRECRUITERS_POSTINGS_URL.format(slug=quote(slug))}?limit=100&offset={offset}"
+        payload = _json(http, url)
+        rows = payload.get("content") or [] if isinstance(payload, dict) else []
+        if not rows:
+            break
+        found.extend(filter(None, (_smartrecruiters_posting(job, slug) for job in rows)))
+        total = payload.get("totalFound")
+        offset += len(rows)
+        if isinstance(total, int) and offset >= total:
+            break
+    return found
+
+
 def search_smartrecruiters(http, *, keywords: list[str], limit: int = SMARTRECRUITERS_LIMIT) -> list:
-    """One query per keyword. Geography rides on the language of the keyword."""
+    """One query per keyword, then the full posting list of each employer found.
+
+    `sr-jobs/search` is a fixed teaser: it clamps `limit` to ~98 and ignores
+    `offset`, `page` and `pageSize` outright — measured live, keyword "Engineer"
+    reports `totalFound: 40422` and returns 99 rows at every offset. The log
+    line used to print that 99 as though it were the answer.
+
+    So the search is used for what it is good at — naming employers — and each
+    employer is then expanded through the documented per-company postings API,
+    which does honour `offset`. The shortfall is logged either way, because an
+    operator who cannot see it will conclude the market is thin.
+    """
     listings: list[JobListing] = []
+    seen_companies: dict[str, str] = {}
     for keyword in keywords:
         payload = _json(http, f"{SMARTRECRUITERS_URL}?limit={limit}&keyword={quote(keyword)}")
         rows = payload.get("content") or [] if isinstance(payload, dict) else []
+        total = payload.get("totalFound") if isinstance(payload, dict) else None
         listings.extend(filter(None, (_smartrecruiters_listing(job) for job in rows)))
-        log.info("jobsearch: smartrecruiters %-24s %4d jobs", keyword, len(rows))
+        for job in rows:
+            slug = ((job.get("company") or {}).get("identifier") or "").strip()
+            if slug and slug not in seen_companies:
+                seen_companies[slug] = keyword
+        if isinstance(total, int) and total > len(rows):
+            log.info(
+                "jobsearch: smartrecruiters %-24s %4d jobs of %d — the search endpoint caps "
+                "here, expanding by employer",
+                keyword,
+                len(rows),
+                total,
+            )
+        else:
+            log.info("jobsearch: smartrecruiters %-24s %4d jobs", keyword, len(rows))
+
+    expanded = 0
+    for slug in list(seen_companies)[:SMARTRECRUITERS_MAX_COMPANIES]:
+        try:
+            rows = _smartrecruiters_company(http, slug)
+        except Exception as exc:
+            log.debug("jobsearch: smartrecruiters company %s failed: %s", slug, exc)
+            continue
+        listings.extend(rows)
+        expanded += len(rows)
+    if seen_companies:
+        log.info(
+            "jobsearch: smartrecruiters expanded %d employers into %d further postings",
+            min(len(seen_companies), SMARTRECRUITERS_MAX_COMPANIES),
+            expanded,
+        )
     return listings
 
 
@@ -229,10 +315,37 @@ def search_all(
     with ThreadPoolExecutor(max_workers=max(1, concurrency)) as pool:
         for found in pool.map(workable_slice, countries):
             listings.extend(found)
+    from_workable = len(listings)
 
-    if smartrecruiters_keywords:
+    # SmartRecruiters is normally driven by native-language keywords, because it
+    # has no geography parameter and the query language is what selects the
+    # market. But it is also a completely independent provider, and the two do
+    # not share an IP reputation: Workable rate-limits an address off entirely
+    # after a few thousand requests — measured, an hour of 429s — and a run that
+    # then harvests nothing is not a thin market, it is a dead seed.
+    #
+    # So when Workable comes back empty, fall back to SmartRecruiters with
+    # whatever keywords we have rather than returning nothing at all.
+    sr_keywords = smartrecruiters_keywords or []
+    fallback = False
+    if not sr_keywords and from_workable == 0 and keywords:
+        sr_keywords = keywords
+        fallback = True
+        log.warning(
+            "jobsearch: workable returned nothing across %d countries — almost certainly "
+            "rate-limiting this address. Falling back to SmartRecruiters.",
+            len(countries),
+        )
+
+    if sr_keywords:
         try:
-            listings.extend(search_smartrecruiters(http, keywords=smartrecruiters_keywords))
+            listings.extend(search_smartrecruiters(http, keywords=sr_keywords))
         except Exception as exc:
             log.warning("jobsearch: smartrecruiters failed: %s", exc)
+
+    if fallback and len(listings) > from_workable:
+        log.info(
+            "jobsearch: the SmartRecruiters fallback supplied %d listings Workable could not",
+            len(listings) - from_workable,
+        )
     return listings

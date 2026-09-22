@@ -23,6 +23,9 @@ from ..normalize import canonicalize_url
 from .base import BaseAdapter
 
 SEARCH_BASE = "https://arbeidsplassen.nav.no/stillinger"
+#: Rows the listing hands out per request. `from` is an offset in rows,
+#: so paging means stepping by this, not incrementing a page number.
+PAGE_SIZE = 25
 DETAIL_URL_RX = re.compile(r"/stillinger/stilling/([a-f0-9\-]{20,})", re.I)
 
 
@@ -46,10 +49,18 @@ class NavNoAdapter(BaseAdapter):
         for page in range(1, max_pages + 1):
             page_params = list(flat)
             if page > 1:
-                page_params.append(("page", str(page)))
+                # `from` is a row offset, not a page number. The parameter this
+                # used — `page` — is silently ignored by arbeidsplassen: every
+                # request came back with byte-identical results, measured at
+                # 100% overlap between "page=1", "page=2" and "page=3". So the
+                # walk always stopped after the first 25 ads on the `new == 0`
+                # check below, and every NAV target in every config harvested
+                # exactly 25 listings no matter what `max_pages` said.
+                page_params.append(("from", str((page - 1) * PAGE_SIZE)))
             url = f"{SEARCH_BASE}?{urlencode(page_params, doseq=True)}"
             result = http.get(url)
             if result is None:
+                logging.info("nav.no: no response at offset %d (%s)", (page - 1) * PAGE_SIZE, url)
                 break
             _, html = result
             uuids = self._extract_uuids(html)

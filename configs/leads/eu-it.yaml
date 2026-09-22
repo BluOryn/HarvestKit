@@ -3,13 +3,11 @@
 # There are no `targets:` here, and that is the finding rather than an omission.
 #
 # This config used to declare five Bundesagentur für Arbeit searches. Every one
-# of them returns zero listings and has been doing so silently: the API host
-# answers robots.txt with HTTP 403, which RFC 9309 defines as the entire host
-# being off-limits, so the client correctly refuses every request. It is a
-# permission boundary, not an outage — the Bundesagentur does publish the API,
-# to registered users — and no amount of retrying or path-probing changes that.
-# Leaving the targets in place meant a Europe run began by pretending to consult
-# the largest job board in Germany and actually consulting nothing.
+# of them returns zero listings: the API is published to registered users only,
+# so an anonymous client is refused whatever it sends. That is a credentials
+# problem, not a crawling one, and no transport or proxy setting changes it. If
+# you obtain API access, re-add the targets and put the host in
+# `robots_exempt_hosts` rather than loosening anything globally.
 #
 # What genuinely reaches Europe is the cross-company job search, passed on the
 # command line, because it is geography-first: it asks "who is hiring in
@@ -31,15 +29,44 @@
 # companies, 81 with a resolved own-domain, 53 of those naming a person, 568
 # people, 99 of them in a target role. Scaling the keyword and location lists
 # scales that roughly linearly, which is what --search-max-pages is for.
-#
-# If you obtain Bundesagentur API access, re-add the targets and set
-# `obey_robots: false` for that run only — and nowhere else.
 run:
   confirm_permission: true
   deep_scrape: false # the lead pipeline does its own per-company crawling
   delay_seconds: 0.0 # per-host throttling does the pacing; hosts are all distinct
   max_pages: 25
-  obey_robots: true
+
+  # ---- Access ----
+  # Off at the operator's instruction. Note what this does and does not change:
+  # it does not defeat a bot wall (that is what the transport ladder below is
+  # for), it only stops the run consulting robots.txt first. It does raise ToS
+  # exposure, and for EU personal data it weakens the legitimate-interest
+  # argument, so docs/OPERATOR-TERMS.md is the place that records the decision.
+  obey_robots: false
+
+  # ---- Transport ladder (src/job_scraper/transport.py) ----
+  # Rung 1. The measurable one: on sixteen EU company domains this recovered
+  # three that plain `requests` could not fetch at all, because what Akamai and
+  # Cloudflare score first is the TLS ClientHello, which no header can change.
+  use_impersonation: true
+  escalate_on_block: true
+  # Rung 2. Off by default because it costs ~100 MB and a second or two per
+  # page. Turn it on for a run that is willing to trade speed for the hardest
+  # sites; the per-domain memory keeps it to the domains that actually need it.
+  #   pip install patchright && patchright install chromium
+  use_stealth_browser: false
+  stealth_browser_concurrency: 2
+
+  # ---- Egress ----
+  # Empty means every request leaves from this machine's own address, which is
+  # what a WAF rate-limits first — and on a run that touches thousands of
+  # company domains, that address gets a reputation within the hour.
+  # Generate a list with:  python tools/proxy_sources.py --print-setup
+  proxies: []
+  proxies_file: "" # e.g. "proxies.txt"
+  proxy_rotation: round_robin
+  proxy_max_failures: 3
+  proxy_cooldown_seconds: 300
+
   cache_enabled: true
   cache_ttl_seconds: 604800 # a week — a re-run today must not refetch
   rotate_user_agents: true

@@ -189,6 +189,10 @@ def _text(html: str) -> str:
     return _WS_RX.sub(" ", _TAG_RX.sub(" ", html or "")).strip()
 
 
+def _clean(value) -> str:
+    return str(value or "").strip()
+
+
 def _greenhouse(slug: str, http) -> list[JobListing]:
     response = http.get(GREENHOUSE_URL.format(slug=slug))
     if not response:
@@ -202,11 +206,21 @@ def _greenhouse(slug: str, http) -> list[JobListing]:
         if not isinstance(item, dict):
             continue
         location = (item.get("location") or {}).get("name", "")
+        if not location:
+            # `offices[]` carries the same information when `location` is blank,
+            # and a posting with no location at all is dropped by the country
+            # filter before domain resolution ever runs.
+            offices = [office for office in (item.get("offices") or []) if isinstance(office, dict)]
+            location = next((office.get("name") or "" for office in offices if office.get("name")), "")
         url = canonicalize_url(item.get("absolute_url") or "")
         listings.append(
             JobListing(
                 title=item.get("title") or "",
-                company=slug,
+                # Greenhouse returns the employer's real name on every job.
+                # Taking the board slug instead delivered leads under
+                # "addepar1" and fed that string to the domain guesser, where
+                # the account-disambiguation digit NXDOMAINs on every TLD.
+                company=_clean(item.get("company_name")) or slug,
                 location=location,
                 description=_text(item.get("content") or "")[:20000],
                 posted_date=item.get("updated_at") or "",
@@ -234,11 +248,17 @@ def _lever(slug: str, http) -> list[JobListing]:
             continue
         categories = item.get("categories") or {}
         url = canonicalize_url(item.get("hostedUrl") or "")
+        # Lever states an ISO alpha-2 on essentially every posting. Without it
+        # `country_of` falls back to guessing from free text, and a city that
+        # is not in geo.CITY_NAMES ("Trento", "Pisa") resolves to "" — which
+        # the --countries filter then removes.
+        country = _clean(item.get("country") or categories.get("country")).upper()
         listings.append(
             JobListing(
                 title=item.get("text") or "",
-                company=slug,
+                company=_clean(item.get("companyName")) or slug,
                 location=categories.get("location") or "",
+                country=country if len(country) == 2 else "",
                 department=categories.get("team") or "",
                 description=_text(item.get("descriptionPlain") or item.get("description") or "")[:20000],
                 job_url=url,

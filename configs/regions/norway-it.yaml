@@ -105,9 +105,11 @@ locations:
   allow_remote: true
 
 targets:
-  # 1. finn.no — broad IT search, published in last 30 days.
+  # 1. finn.no — broad IT search, published in the last 7 days.
+  #    finn rejects published=14/21/30 with HTTP 404; 7 is the widest
+  #    window it accepts, measured live.
   - name: finn-it-30d
-    url: "https://www.finn.no/job/fulltime/search.html?q=utvikler+OR+developer+OR+engineer+OR+software+OR+devops+OR+data&published=30"
+    url: "https://www.finn.no/job/fulltime/search.html?q=utvikler+OR+developer+OR+engineer+OR+software+OR+devops+OR+data&published=7"
     adapter: finn.no
   # 2. arbeidsplassen.nav.no — government public feed
   - name: nav-it-30d-utvikler

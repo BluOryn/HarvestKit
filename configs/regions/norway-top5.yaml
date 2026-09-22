@@ -47,7 +47,7 @@ targets:
   # ---- 1. finn.no — anonymous list cap (~57 ads). q= ignored even via Playwright. ----
   # Truth: finn requires logged-in session to honor q=. Best we can do anon = unfiltered.
   - name: finn-recent
-    url: "https://www.finn.no/job/fulltime/search.html?published=30"
+    url: "https://www.finn.no/job/fulltime/search.html?published=7"
     adapter: finn.no
 
   # ---- 2. NAV — VERIFIED occupationFirstLevels[]=IT (695 jobs) ----

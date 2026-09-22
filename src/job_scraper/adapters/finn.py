@@ -30,6 +30,40 @@ SEARCH_BASE = "https://www.finn.no/job/fulltime/search.html"
 AD_PATH_RX = re.compile(r"/job/ad/(\d+)")
 
 
+#: Values finn.no accepts for the recency filter. Measured live: 1, 2, 3 and 7
+#: answer 200; 14, 21 and 30 answer HTTP 404. Three shipped configs asked for
+#: `published=30` and therefore harvested nothing at all — and because the 404
+#: arrived as a plain "no result", nothing in the run said why.
+PUBLISHED_VALUES = (1, 2, 3, 7)
+
+
+def _clamp_published(params: list[tuple]) -> list[tuple]:
+    """Hold `published` to a value finn will actually serve."""
+    out: list[tuple] = []
+    for key, value in params:
+        if key != "published":
+            out.append((key, value))
+            continue
+        try:
+            days = int(str(value))
+        except (TypeError, ValueError):
+            logging.warning("finn.no: published=%r is not a number — dropping it", value)
+            continue
+        if days in PUBLISHED_VALUES:
+            out.append((key, str(days)))
+            continue
+        allowed = max(v for v in PUBLISHED_VALUES if v <= days) if days > PUBLISHED_VALUES[0] else 1
+        logging.warning(
+            "finn.no: published=%d is rejected by the site with HTTP 404 (it accepts %s). "
+            "Using published=%d instead so this target returns something.",
+            days,
+            ", ".join(str(v) for v in PUBLISHED_VALUES),
+            allowed,
+        )
+        out.append((key, str(allowed)))
+    return out
+
+
 class FinnNoAdapter(BaseAdapter):
     """Listing harvester for finn.no. Detail extraction handled by deep_scrape."""
 
@@ -48,6 +82,7 @@ class FinnNoAdapter(BaseAdapter):
         for k, vs in base_params.items():
             for v in vs:
                 flat_params.append((k, v))
+        flat_params = _clamp_published(flat_params)
 
         listings: list[JobListing] = []
         seen_ids: set[str] = set()

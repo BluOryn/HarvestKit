@@ -20,7 +20,7 @@ locations:
   allow_remote: true
 targets:
 - name: finn-it
-  url: https://www.finn.no/job/fulltime/search.html?occupation=0.23&published=30
+  url: https://www.finn.no/job/fulltime/search.html?occupation=0.23&published=7
   adapter: finn.no
 - name: karrierestart-1
   url: https://karrierestart.no/jobb/

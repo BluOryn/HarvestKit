@@ -12,7 +12,28 @@ run:
   deep_scrape: false # the lead pipeline does its own per-company crawling
   delay_seconds: 0.0 # per-host throttling does the pacing; hosts are all distinct
   max_pages: 40
-  obey_robots: true
+
+  # See configs/leads/eu-it.yaml for what this switch does and does not buy,
+  # and docs/OPERATOR-TERMS.md for the decision behind it.
+  obey_robots: false
+
+  # ---- Transport ladder ----
+  # Swiss company sites are heavily Cloudflare-fronted, and the Impressum is
+  # where almost every Swiss address comes from — so a blocked homepage costs
+  # the whole company here, more than it does on the German run.
+  use_impersonation: true
+  escalate_on_block: true
+  use_stealth_browser: false
+  stealth_browser_concurrency: 2
+
+  # ---- Egress ----
+  # python tools/proxy_sources.py --print-setup
+  proxies: []
+  proxies_file: ""
+  proxy_rotation: round_robin
+  proxy_max_failures: 3
+  proxy_cooldown_seconds: 300
+
   cache_enabled: true
   cache_ttl_seconds: 604800 # a week — a re-run today must not refetch
   rotate_user_agents: true

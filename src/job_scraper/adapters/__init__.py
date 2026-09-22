@@ -1,4 +1,3 @@
-import re
 from urllib.parse import urlparse
 
 from ..config import TargetConfig
@@ -51,34 +50,63 @@ def get_adapter(target: TargetConfig) -> BaseAdapter:
     return ADAPTERS.get(adapter_name) or ADAPTERS["generic"]
 
 
+#: (adapter name, exact hosts, suffixes). A host matches when it *is* one of
+#: the exact hosts or ends in ".<suffix>" — never on a substring.
+#:
+#: Substring matching is the bug this replaces. `"smartrecruiters.com" in host`
+#: is true for `smartrecruiters.com.evil.example`, and
+#: `"arbeitsagentur.de" in host` is true for `arbeitsagentur.de.phish.tld`. A
+#: scraped apply_url is attacker-influenced, so a lookalike host could steer the
+#: run into an adapter that then posts the operator's headers and cookies to it
+#: as though it were a trusted ATS API.
+_ADAPTER_HOSTS: tuple[tuple[str, frozenset[str], tuple[str, ...]], ...] = (
+    (
+        "greenhouse",
+        frozenset(
+            {
+                "boards.greenhouse.io",
+                "boards-api.greenhouse.io",
+                "job-boards.greenhouse.io",
+                "api.greenhouse.io",
+            }
+        ),
+        ("greenhouse.io",),
+    ),
+    ("lever", frozenset({"jobs.lever.co", "api.lever.co"}), ("lever.co",)),
+    (
+        "smartrecruiters",
+        frozenset({"jobs.smartrecruiters.com", "api.smartrecruiters.com", "careers.smartrecruiters.com"}),
+        ("smartrecruiters.com",),
+    ),
+    ("personio", frozenset(), ("jobs.personio.com", "jobs.personio.de")),
+    ("ashby", frozenset({"jobs.ashbyhq.com", "api.ashbyhq.com"}), ("ashbyhq.com",)),
+    ("recruitee", frozenset(), ("recruitee.com",)),
+    ("workable", frozenset({"apply.workable.com", "www.workable.com"}), ("workable.com",)),
+    ("workday", frozenset(), ("myworkdayjobs.com", "myworkdaysite.com")),
+    (
+        "arbeitsagentur",
+        frozenset({"arbeitsagentur.de", "www.arbeitsagentur.de", "rest.arbeitsagentur.de"}),
+        ("arbeitsagentur.de",),
+    ),
+    ("jobs.ch", frozenset({"jobs.ch", "www.jobs.ch"}), ("jobs.ch",)),
+    ("finn.no", frozenset({"finn.no", "www.finn.no"}), ("finn.no",)),
+    ("nav.no", frozenset({"arbeidsplassen.nav.no", "nav.no", "www.nav.no"}), ("nav.no",)),
+    ("karrierestart.no", frozenset({"karrierestart.no", "www.karrierestart.no"}), ("karrierestart.no",)),
+    ("jobbsafari.no", frozenset({"jobbsafari.no", "www.jobbsafari.no"}), ("jobbsafari.no",)),
+)
+
+
 def _detect_adapter(url: str) -> str:
-    host = urlparse(url).netloc.lower()
-    if "boards.greenhouse.io" in host or "boards-api.greenhouse.io" in host:
-        return "greenhouse"
-    if host == "jobs.lever.co" or host.endswith(".lever.co"):
-        return "lever"
-    if "smartrecruiters.com" in host:
-        return "smartrecruiters"
-    if host.endswith(".jobs.personio.com") or host.endswith(".jobs.personio.de"):
-        return "personio"
-    if "jobs.ashbyhq.com" in host or host.endswith(".ashbyhq.com"):
-        return "ashby"
-    if host.endswith(".recruitee.com"):
-        return "recruitee"
-    if host.endswith(".workable.com") or "apply.workable.com" in host:
-        return "workable"
-    if re.search(r"\.wd\d+\.myworkdayjobs\.com$", host) or "myworkdayjobs.com" in host:
-        return "workday"
-    if "arbeitsagentur.de" in host or "rest.arbeitsagentur" in host:
-        return "arbeitsagentur"
-    if host == "www.jobs.ch" or host == "jobs.ch" or host.endswith(".jobs.ch"):
-        return "jobs.ch"
-    if host == "www.finn.no" or host == "finn.no" or host.endswith(".finn.no"):
-        return "finn.no"
-    if "arbeidsplassen.nav.no" in host or host == "arbeidsplassen.nav.no":
-        return "nav.no"
-    if "karrierestart.no" in host:
-        return "karrierestart.no"
-    if "jobbsafari.no" in host:
-        return "jobbsafari.no"
+    """The adapter for a URL's host, matched on labels rather than substrings."""
+    try:
+        host = (urlparse(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return "generic"
+    if not host:
+        return "generic"
+    for name, exact, suffixes in _ADAPTER_HOSTS:
+        if host in exact:
+            return name
+        if any(host.endswith("." + suffix) for suffix in suffixes):
+            return name
     return "generic"
