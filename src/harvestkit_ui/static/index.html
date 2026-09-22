@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HarvestKit</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --ink: #16191d;
+    --muted: #61686f;
+    --line: #dfe3e8;
+    --accent: #1f6feb;
+    --accent-ink: #ffffff;
+    --ok: #157f3d;
+    --warn: #9a6200;
+    --bad: #b42318;
+    --code-bg: #12151a;
+    --code-ink: #d7dde5;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1216; --panel: #171b21; --ink: #e6e9ee; --muted: #98a1ab;
+      --line: #2a313a; --accent: #4f8cf7; --ok: #5cc98a; --warn: #e3b341; --bad: #f5776b;
+      --code-bg: #0b0e12; --code-ink: #cdd5df;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel);
+    position: sticky; top: 0; z-index: 10;
+  }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: -0.01em; }
+  header .spacer { flex: 1; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px;
+    border-radius: 999px; font-size: 13px; font-weight: 600; border: 1px solid var(--line);
+  }
+  .pill.idle    { color: var(--muted); }
+  .pill.running { color: var(--accent); border-color: var(--accent); }
+  .pill.ok      { color: var(--ok); border-color: var(--ok); }
+  .pill.short   { color: var(--warn); border-color: var(--warn); }
+  .pill.blocked,
+  .pill.error   { color: var(--bad); border-color: var(--bad); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .pill.running .dot { animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+
+  nav { display: flex; gap: 4px; padding: 0 20px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
+  nav button {
+    background: none; border: none; border-bottom: 2px solid transparent; color: var(--muted);
+    padding: 11px 13px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+
+  main { padding: 20px; max-width: 1180px; margin: 0 auto; }
+  section[hidden] { display: none; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px; margin-bottom: 16px;
+  }
+  .card h2 { margin: 0 0 4px; font-size: 16px; }
+  .card p.blurb { margin: 0 0 16px; color: var(--muted); font-size: 14px; max-width: 70ch; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+  label.field { display: block; }
+  label.field > span.name { display: block; font-weight: 600; font-size: 13.5px; margin-bottom: 4px; }
+  label.field > span.hint { display: block; color: var(--muted); font-size: 12.5px; margin-top: 4px; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px;
+    background: var(--bg); color: var(--ink); font: inherit;
+  }
+  textarea { min-height: 130px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+  label.toggle { display: flex; gap: 9px; align-items: flex-start; }
+  label.toggle input { margin-top: 3px; }
+
+  details.more { margin-top: 16px; border-top: 1px solid var(--line); padding-top: 12px; }
+  details.more > summary { cursor: pointer; font-weight: 600; font-size: 13.5px; color: var(--muted); }
+  details.more > .grid { margin-top: 14px; }
+
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 18px; flex-wrap: wrap; }
+  button.primary, button.ghost, a.ghost {
+    font: inherit; font-weight: 600; padding: 9px 18px; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink); text-decoration: none;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 14px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: var(--panel); }
+  .stat .n { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+  .stat .k { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+
+  .notice { border-radius: 8px; padding: 11px 14px; font-size: 14px; margin-bottom: 14px; border: 1px solid; white-space: pre-wrap; }
+  .notice.ok      { border-color: var(--ok);   color: var(--ok); }
+  .notice.short   { border-color: var(--warn); color: var(--warn); }
+  .notice.blocked,
+  .notice.error   { border-color: var(--bad);  color: var(--bad); }
+  .notice.info    { border-color: var(--line); color: var(--muted); }
+
+  pre.log {
+    background: var(--code-bg); color: var(--code-ink); border-radius: 8px; padding: 13px 15px;
+    max-height: 460px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px; line-height: 1.55; margin: 0; white-space: pre-wrap; word-break: break-word;
+  }
+  pre.log .warn { color: #e3b341; }
+  pre.log .err  { color: #f5776b; }
+  pre.log .good { color: #5cc98a; }
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+  th { position: sticky; top: 0; background: var(--panel); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+  tbody tr:hover { background: var(--bg); }
+
+  ul.files { list-style: none; margin: 0; padding: 0; }
+  ul.files li { display: flex; gap: 12px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  ul.files li .name { font-weight: 600; }
+  ul.files li .meta { color: var(--muted); font-size: 12.5px; }
+  ul.files li .spacer { flex: 1; }
+
+  code.inline { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px; font-size: 12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>HarvestKit</h1>
+  <span id="status" class="pill idle"><span class="dot"></span><span id="statusText">Ready</span></span>
+  <span class="spacer"></span>
+  <button id="stop" class="ghost" disabled>Stop the run</button>
+</header>
+
+<nav id="tabs">
+  <button data-tab="run" aria-selected="true">Run</button>
+  <button data-tab="results" aria-selected="false">Results</button>
+  <button data-tab="network" aria-selected="false">Network &amp; proxies</button>
+  <button data-tab="log" aria-selected="false">Log</button>
+</nav>
+
+<main>
+  <section id="tab-run">
+    <div id="jobCards"></div>
+  </section>
+
+  <section id="tab-results" hidden>
+    <div class="card">
+      <h2>Finished files</h2>
+      <p class="blurb">Every CSV this machine has produced, newest first. Click one to look
+        through it before you send it anywhere.</p>
+      <ul class="files" id="fileList"></ul>
+    </div>
+    <div class="card" id="previewCard" hidden>
+      <h2 id="previewTitle">Preview</h2>
+      <p class="blurb" id="previewMeta"></p>
+      <div class="actions" style="margin-top:0;margin-bottom:14px">
+        <a class="ghost" id="downloadLink" download>Download this file</a>
+      </div>
+      <div class="tablewrap"><table><thead id="previewHead"></thead><tbody id="previewBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="tab-network" hidden>
+    <div class="card">
+      <h2>Proxies</h2>
+      <p class="blurb">One per line. A run uses these in rotation, and each gets its own
+        browser identity and cookie jar. Leave it empty to connect directly from this machine —
+        which is fine at home and usually blocked on a company network.</p>
+      <textarea id="proxyBox" spellcheck="false" placeholder="http://198.51.100.7:8080&#10;socks5h://127.0.0.1:1080"></textarea>
+      <div class="actions">
+        <button class="primary" id="saveProxies">Save</button>
+        <span id="proxyCount" class="meta" style="color:var(--muted);font-size:13px"></span>
+      </div>
+    </div>
+    <div id="networkCards"></div>
+  </section>
+
+  <section id="tab-log" hidden>
+    <div class="card">
+      <h2>Log</h2>
+      <p class="blurb" id="logMeta">Nothing has run yet.</p>
+      <pre class="log" id="logFull">—</pre>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const TOKEN = "__HARVESTKIT_TOKEN__";
+  const $ = (id) => document.getElementById(id);
+
+  let catalogue = [];
+  let settings = {};
+  let logOffset = 0;
+  let logLines = [];
+  let lastStatus = "idle";
+  let activeJob = null;
+
+  // ---------------------------------------------------------------- fetch
+  async function api(path, options) {
+    const joiner = path.includes("?") ? "&" : "?";
+    const response = await fetch(path + joiner + "token=" + encodeURIComponent(TOKEN), {
+      ...options,
+      headers: { "Content-Type": "application/json", "X-HarvestKit-Token": TOKEN },
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(data.error || ("HTTP " + response.status));
+    return data;
+  }
+  const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
+
+  // ------------------------------------------------------------- rendering
+  function fieldControl(job, field) {
+    const saved = (settings["form:" + job.key] || {});
+    const value = saved[field.name] !== undefined ? saved[field.name] : field.default;
+    const id = `f-${job.key}-${field.name}`;
+
+    if (field.kind === "toggle") {
+      const wrap = document.createElement("label");
+      wrap.className = "toggle field";
+      wrap.innerHTML = `<input type="checkbox" id="${id}"><span><span class="name">${esc(field.label)}</span>
+        <span class="hint">${esc(field.help)}</span></span>`;
+      wrap.querySelector("input").checked = !!value;
+      return wrap;
+    }
+
+    const wrap = document.createElement("label");
+    wrap.className = "field";
+    const head = `<span class="name">${esc(field.label)}</span>`;
+    const tail = field.help ? `<span class="hint">${esc(field.help)}</span>` : "";
+
+    if (field.kind === "choice") {
+      const options = field.choices.map((choice) =>
+        `<option value="${esc(choice)}"${String(choice) === String(value) ? " selected" : ""}>${esc(choice || "— none —")}</option>`
+      ).join("");
+      wrap.innerHTML = `${head}<select id="${id}">${options}</select>${tail}`;
+      return wrap;
+    }
+    if (field.kind === "number") {
+      const bounds = (field.min !== null && field.min !== undefined ? ` min="${field.min}"` : "") +
+                     (field.max !== null && field.max !== undefined ? ` max="${field.max}"` : "");
+      wrap.innerHTML = `${head}<input type="number" id="${id}" value="${esc(value)}"${bounds} step="any">${tail}`;
+      return wrap;
+    }
+    wrap.innerHTML = `${head}<input type="text" id="${id}" value="${esc(value)}" spellcheck="false">${tail}`;
+    return wrap;
+  }
+
+  function renderJobCard(job) {
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `<h2>${esc(job.title)}</h2><p class="blurb">${esc(job.blurb)}</p>`;
+
+    const basic = document.createElement("div");
+    basic.className = "grid";
+    const sections = {};
+    job.fields.forEach((field) => {
+      const control = fieldControl(job, field);
+      if (field.section === "basic") { basic.appendChild(control); return; }
+      (sections[field.section] = sections[field.section] || []).push(control);
+    });
+    if (basic.children.length) card.appendChild(basic);
+
+    Object.keys(sections).forEach((name) => {
+      const details = document.createElement("details");
+      details.className = "more";
+      const grid = document.createElement("div");
+      grid.className = "grid";
+      sections[name].forEach((control) => grid.appendChild(control));
+      details.innerHTML = `<summary>${esc(sectionTitle(name))}</summary>`;
+      details.appendChild(grid);
+      card.appendChild(details);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const button = document.createElement("button");
+    button.className = "primary";
+    button.textContent = job.long_running ? "Start" : "Run this check";
+    button.onclick = () => start(job, button);
+    actions.appendChild(button);
+    card.appendChild(actions);
+    return card;
+  }
+
+  function sectionTitle(name) {
+    return ({
+      seeds: "Where companies come from",
+      crawl: "How hard to crawl",
+      email: "Email and filtering",
+    })[name] || name;
+  }
+
+  function collect(job) {
+    const values = {};
+    job.fields.forEach((field) => {
+      const element = $(`f-${job.key}-${field.name}`);
+      if (!element) return;
+      values[field.name] = field.kind === "toggle" ? element.checked : element.value;
+    });
+    return values;
+  }
+
+  async function start(job, button) {
+    button.disabled = true;
+    try {
+      activeJob = job;
+      await post("/api/run", { job: job.key, values: collect(job) });
+      logOffset = 0; logLines = [];
+      selectTab("log");
+      poll();
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  // ------------------------------------------------------------ live state
+  function renderStatus(state) {
+    const pill = $("status");
+    pill.className = "pill " + (state.running ? "running" : state.status);
+    $("statusText").textContent = state.running
+      ? (state.label || "Running") + " — " + (state.message || "working…")
+      : ({ idle: "Ready", ok: "Done", short: "Done, short", blocked: "Harvested nothing",
+           error: "Failed", stopped: "Stopped" }[state.status] || state.status);
+    $("stop").disabled = !state.running;
+
+    const meta = $("logMeta");
+    if (state.started_at) {
+      const mins = Math.floor(state.elapsed_seconds / 60), secs = Math.round(state.elapsed_seconds % 60);
+      meta.textContent = `${state.label} · ${mins}m ${secs}s · ${state.command}`;
+    }
+
+    renderProgress(state);
+  }
+
+  function renderProgress(state) {
+    let holder = $("progressCard");
+    const interesting = state.running || state.status !== "idle";
+    if (!interesting) { if (holder) holder.remove(); return; }
+    if (!holder) {
+      holder = document.createElement("div");
+      holder.className = "card";
+      holder.id = "progressCard";
+      $("tab-run").prepend(holder);
+    }
+    const funnel = state.funnel || {};
+    const stats = [
+      ["Listings seeded", state.listings],
+      ["Companies", state.companies],
+      ["People found", funnel.people_found || 0],
+      ["With an address", funnel.with_email || 0],
+      ["Rows written", state.rows_written],
+    ];
+    const noticeClass = state.running ? "info" : (state.status || "info");
+    holder.innerHTML =
+      `<h2>${esc(state.label || "Run")}</h2>` +
+      `<div class="notice ${noticeClass}">${esc(state.message || "")}</div>` +
+      `<div class="stats">${stats.map(([k, n]) =>
+        `<div class="stat"><div class="n">${Number(n || 0).toLocaleString()}</div><div class="k">${esc(k)}</div></div>`
+      ).join("")}</div>` +
+      (state.reachability ? `<div class="notice info"><strong>Reachability</strong> — ${esc(state.reachability)}</div>` : "") +
+      (state.output_path && !state.running ? `<div class="actions"><a class="ghost" href="/api/download?path=${encodeURIComponent(relative(state.output_path))}&token=${encodeURIComponent(TOKEN)}" download>Download the file</a></div>` : "");
+  }
+
+  function relative(path) {
+    const parts = String(path || "").replace(/\\/g, "/").split("/output/");
+    return parts.length > 1 ? "output/" + parts[parts.length - 1] : path;
+  }
+
+  function appendLog(lines) {
+    if (!lines.length) return;
+    logLines = logLines.concat(lines).slice(-4000);
+    const pane = $("logFull");
+    const pinned = pane.scrollTop + pane.clientHeight >= pane.scrollHeight - 40;
+    pane.innerHTML = logLines.map(colour).join("\n");
+    if (pinned) pane.scrollTop = pane.scrollHeight;
+  }
+
+  function colour(line) {
+    const safe = esc(line);
+    if (/ERROR|FAILED|Traceback|refusing/i.test(line)) return `<span class="err">${safe}</span>`;
+    if (/WARNING|blocked|short of/i.test(line)) return `<span class="warn">${safe}</span>`;
+    if (/reachability:|funnel:|wrote \d+ rows|All hard guarantees/i.test(line)) return `<span class="good">${safe}</span>`;
+    return safe;
+  }
+
+  let polling = false;
+  async function poll() {
+    if (polling) return;
+    polling = true;
+    try {
+      const state = await api("/api/state?offset=" + logOffset);
+      logOffset = state.offset;
+      appendLog(state.log || []);
+      renderStatus(state);
+      if (!state.running && lastStatus === "running") {
+        refreshFiles();
+      }
+      lastStatus = state.running ? "running" : state.status;
+    } catch (error) {
+      /* the panel was closed, or the page is mid-reload */
+    } finally {
+      polling = false;
+    }
+  }
+
+  // --------------------------------------------------------------- results
+  async function refreshFiles() {
+    const { files } = await api("/api/outputs");
+    const list = $("fileList");
+    list.innerHTML = "";
+    if (!files.length) {
+      list.innerHTML = `<li><span class="meta">Nothing yet. Run “Find leads” and the file will appear here.</span></li>`;
+      return;
+    }
+    files.forEach((file) => {
+      const item = document.createElement("li");
+      item.innerHTML = `<span class="name">${esc(file.name)}</span>
+        <span class="meta">${(file.size / 1024).toFixed(0)} KB · ${new Date(file.modified * 1000).toLocaleString()}</span>
+        <span class="spacer"></span>`;
+      const open = document.createElement("button");
+      open.className = "ghost";
+      open.textContent = "Open";
+      open.onclick = () => preview(file.path);
+      item.appendChild(open);
+      list.appendChild(item);
+    });
+  }
+
+  async function preview(path) {
+    const data = await api("/api/results?path=" + encodeURIComponent(path));
+    $("previewCard").hidden = false;
+    $("previewTitle").textContent = path;
+    $("previewMeta").textContent = data.exists
+      ? `${data.total.toLocaleString()} rows · showing the first ${Math.min(data.rows.length, data.total)}`
+      : "That file is not there any more.";
+    $("downloadLink").href = "/api/download?path=" + encodeURIComponent(path) + "&token=" + encodeURIComponent(TOKEN);
+    const columns = data.columns.slice(0, 14);
+    $("previewHead").innerHTML = "<tr>" + columns.map((c) => `<th>${esc(c)}</th>`).join("") + "</tr>";
+    $("previewBody").innerHTML = data.rows.map((row) =>
+      "<tr>" + columns.map((c) => `<td title="${esc(row[c] || "")}">${esc(row[c] || "")}</td>`).join("") + "</tr>"
+    ).join("");
+    $("previewCard").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // ---------------------------------------------------------------- tabs
+  function selectTab(name) {
+    document.querySelectorAll("#tabs button").forEach((button) => {
+      button.setAttribute("aria-selected", String(button.dataset.tab === name));
+    });
+    ["run", "results", "network", "log"].forEach((tab) => {
+      $("tab-" + tab).hidden = tab !== name;
+    });
+    if (name === "results") refreshFiles();
+  }
+  $("tabs").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-tab]");
+    if (button) selectTab(button.dataset.tab);
+  });
+
+  $("stop").onclick = async () => {
+    if (!confirm("Stop the run? Everything found so far is already saved.")) return;
+    await post("/api/stop");
+    poll();
+  };
+
+  $("saveProxies").onclick = async () => {
+    const lines = $("proxyBox").value.split("\n");
+    const data = await post("/api/proxies", { proxies: lines });
+    $("proxyCount").textContent = data.written + " saved.";
+    $("proxyBox").value = data.proxies.join("\n");
+  };
+
+  // ------------------------------------------------------------------ util
+  function esc(value) {
+    return String(value === undefined || value === null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+
+  // ------------------------------------------------------------------ boot
+  (async () => {
+    const data = await api("/api/catalogue");
+    catalogue = data.jobs;
+    settings = data.settings || {};
+    const runHolder = $("jobCards");
+    const networkHolder = $("networkCards");
+    catalogue.forEach((job) => {
+      const card = renderJobCard(job);
+      const network = job.key === "egress" || job.key === "proxies" || job.key === "doctor";
+      (network ? networkHolder : runHolder).appendChild(card);
+    });
+    $("proxyBox").value = (data.proxies || []).join("\n");
+    $("proxyCount").textContent = (data.proxies || []).length + " configured.";
+    poll();
+    setInterval(poll, 1200);
+  })().catch((error) => {
+    document.querySelector("main").innerHTML =
+      `<div class="card"><h2>The panel could not start</h2><p class="blurb">${esc(error.message)}</p></div>`;
+  });
+})();
+</script>
+</body>
+</html>

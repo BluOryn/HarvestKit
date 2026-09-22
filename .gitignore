@@ -63,3 +63,13 @@ configs/**/*.private.yaml
 # Proxy lists (don't expose IPs publicly)
 proxies.txt
 proxies-*.txt
+
+# pytest-cov output
+.coverage
+.coverage.*
+
+# Launchers written by scripts/install.* — generated per machine, and they
+# point at that machine's virtualenv.
+HarvestKit.bat
+HarvestKit.command
+/harvestkit
