@@ -99,6 +99,16 @@ function makeCounters(runId: number) {
         r.done = (r.done || 0) + 1;
       }),
     patch: (p: Partial<Run>) => update((r) => Object.assign(r, p)),
+    /** This URL is no longer outstanding. Goes through the same chain as the
+     *  counters: two independent get/mutate/put cycles on one row lose each
+     *  other's writes, which is exactly why `chain` exists. */
+    dropPending: (url: string) =>
+      update((r) => {
+        if (Array.isArray(r.pending)) {
+          r.pending = r.pending.filter((candidate) => candidate !== url);
+        }
+        r.progress_at = Date.now();
+      }),
     flush: () => chain,
   };
 }
@@ -133,6 +143,7 @@ export async function startCrawlRun(urls: string[], opts: CrawlOpts = {}) {
   const resolved = resolveOpts(opts);
   const id = (await db.runs.add({
     started_at: Date.now(),
+    progress_at: Date.now(),
     source_url: list[0] || "",
     total: list.length,
     done: 0,
@@ -140,11 +151,44 @@ export async function startCrawlRun(urls: string[], opts: CrawlOpts = {}) {
     failed: 0,
     status: "running",
     type: "deep-crawl",
+    // Written before the crawl starts, so even a worker killed on the very
+    // next tick leaves behind everything needed to resume.
+    pending: list,
+    options: opts as Record<string, unknown>,
   })) as number;
 
   void withKeepalive(() => runCrawl(id, list, resolved));
   return id;
 }
+
+/**
+ * Pick up every crawl a previous service worker left unfinished.
+ *
+ * Called from `chrome.runtime.onStartup` and on worker install. A run whose
+ * `pending` list is empty but whose status is still "running" was killed
+ * between its last completion and its finalisation, so it is closed rather
+ * than restarted.
+ */
+export async function resumeInterruptedRuns(): Promise<number> {
+  const stuck = await db.runs.where("status").equals("running").toArray();
+  let resumed = 0;
+  for (const run of stuck) {
+    if (run.id == null) continue;
+    const pending = Array.isArray(run.pending) ? run.pending.filter(Boolean) : [];
+    if (pending.length === 0) {
+      run.status = run.failed > 0 && run.ok === 0 ? "failed" : "done";
+      run.finished_at = Date.now();
+      await db.runs.put(run);
+      continue;
+    }
+    const resolved = resolveOpts((run.options || {}) as CrawlOpts);
+    console.info(`[JH] resuming run ${run.id}: ${pending.length} URLs left`);
+    void withKeepalive(() => runCrawl(run.id as number, pending, resolved));
+    resumed++;
+  }
+  return resumed;
+}
+
 
 export async function retryFailed(runId: number, opts: CrawlOpts = {}) {
   const failures = await db.failures.where({ run_id: runId, resolved: 0 }).toArray();
@@ -175,13 +219,23 @@ async function runCrawl(runId: number, urls: string[], opts: ResolvedOpts) {
       } catch (e: any) {
         await counters.fail();
         await recordFailure(runId, url, String(e?.message || e));
+      } finally {
+        // Whatever happened, this URL is not outstanding any more. A worker
+        // killed after this point resumes from what is genuinely left.
+        await counters.dropPending(url);
       }
     },
     async () => (await db.runs.get(runId))?.status === "cancelled",
   );
 
   await counters.flush();
-  await counters.patch({ status: cancelled ? "cancelled" : "done", finished_at: Date.now() });
+  await counters.patch({
+    status: cancelled ? "cancelled" : "done",
+    finished_at: Date.now(),
+    // Cleared on the way out so a finished run is never mistaken for an
+    // interrupted one by `resumeInterruptedRuns`.
+    pending: [],
+  });
 }
 
 async function visitWithRetry(

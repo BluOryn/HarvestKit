@@ -15,6 +15,20 @@ export interface Run {
   type: "single" | "list-snapshot" | "deep-crawl" | "bulk" | "general-scrape";
   log?: string;
   mode?: "jobs" | "general";
+  /**
+   * URLs this run has not finished yet, and the options it was started with.
+   *
+   * The crawl queue used to live only in service-worker module memory. Chrome
+   * tears a worker down on crash, extension update, memory pressure or a closed
+   * laptop lid, and nothing re-read the run rows on the way back up — so a
+   * 900-URL crawl that was 400 in simply lost the other 500, the row stayed
+   * "running" forever, and the Runs view span it indefinitely. Persisting the
+   * remainder is what makes `resumeInterruptedRuns` possible.
+   */
+  pending?: string[];
+  options?: Record<string, unknown>;
+  /** Touched on every completion, so a stalled run can be told from a live one. */
+  progress_at?: number;
 }
 
 export interface Failure {
@@ -67,6 +81,17 @@ class JobHarvesterDB extends Dexie {
     this.version(3).stores({
       jobs: "id, source_domain, source_ats, scraped_at, company, title, country, remote_type, *tags",
       records: "id, source_domain, scraped_at, name, city, country",
+      runs: "++id, started_at, status, type, mode",
+      failures: "++id, run_id, url, resolved, last_attempt_at",
+      searches: "++id, name, created_at",
+      settings: "key",
+    });
+    // v4 — runs carry their unfinished queue, so a killed service worker can
+    // pick a crawl back up instead of dropping it. No new index: the added
+    // fields are read by primary key or by the existing `status` index.
+    this.version(4).stores({
+      jobs: "id, source_domain, source_ats, scraped_at, company, title, country, remote_type, *tags",
+      records: "id, source_domain, kind, scraped_at, name, city, country, *tags",
       runs: "++id, started_at, status, type, mode",
       failures: "++id, run_id, url, resolved, last_attempt_at",
       searches: "++id, name, created_at",

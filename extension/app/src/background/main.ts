@@ -1,16 +1,20 @@
 import { db } from "../lib/db";
 import { fingerprintRecord, type GeneralRecord } from "../lib/generalSchema";
 import { emptyJob, fingerprint, type Job } from "../lib/schema";
-import {
-  handleGeneralMessage,
-  handleJobMessage,
-  retryFailed,
-  startCrawlRun,
-  startGeneralCrawlRun,
-} from "./bulk";
+import { handleGeneralMessage, handleJobMessage, resumeInterruptedRuns, retryFailed, startCrawlRun, startGeneralCrawlRun } from "./bulk";
 import { installKeepaliveListener } from "./keepalive";
 
 installKeepaliveListener();
+
+// A service worker can be torn down at any moment — crash, extension update,
+// memory pressure, a closed laptop lid. Nothing used to re-read the run rows
+// on the way back up, so a 900-URL crawl that was 400 in lost the other 500
+// permanently and its row span as "running" forever. Both of these fire on a
+// fresh worker, and a run with nothing left is simply closed.
+chrome.runtime.onStartup.addListener(() => {
+  void resumeInterruptedRuns();
+});
+void resumeInterruptedRuns();
 
 chrome.runtime.onInstalled.addListener(async () => {
   const cur = await chrome.storage.local.get(["autoSave", "showBanner", "theme"]);
@@ -156,13 +160,34 @@ chrome.runtime.onMessage.addListener((msg: any, sender, sendResponse) => {
           await chrome.tabs.sendMessage(tab.id, { type: "EXPAND_CONTENT" }).catch(() => {});
           await new Promise(r => setTimeout(r, 500));
 
-          // Step 2: Extract cards from the current page
+          // Step 2: Walk every results page, not just the one on screen.
+          //
+          // The dashboard sends `maxPages: 100` and toasts "paginate -> collect
+          // -> deep-scrape". This handler used to send a single EXTRACT_LIST and
+          // never read `msg.maxPages`, so a 36-page board returned 25 leads and
+          // the other 875 were silently never requested. The content script has
+          // implemented AUTO_PAGINATE all along; nothing sent it.
           let allCards: any[] = [];
-          try {
-            const listResult = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_LIST" });
-            if (listResult?.cards) allCards = listResult.cards;
-          } catch (e) {
-            console.warn("[JH] EXTRACT_LIST failed:", e);
+          const maxPages = Math.max(1, Number(msg.maxPages) || 1);
+          if (maxPages > 1) {
+            try {
+              const paged = await chrome.tabs.sendMessage(tab.id, {
+                type: "AUTO_PAGINATE",
+                maxPages,
+                delayMs: msg.delayMs || 1500,
+              });
+              if (paged?.ok && Array.isArray(paged.cards)) allCards = paged.cards;
+            } catch (e) {
+              console.warn("[JH] AUTO_PAGINATE failed, falling back to one page:", e);
+            }
+          }
+          if (allCards.length === 0) {
+            try {
+              const listResult = await chrome.tabs.sendMessage(tab.id, { type: "EXTRACT_LIST" });
+              if (listResult?.cards) allCards = listResult.cards;
+            } catch (e) {
+              console.warn("[JH] EXTRACT_LIST failed:", e);
+            }
           }
 
           if (allCards.length === 0) {
@@ -190,25 +215,34 @@ chrome.runtime.onMessage.addListener((msg: any, sender, sendResponse) => {
           // Per-host throttle (1 concurrent / 1.5s) is what matters; overall concurrency
           // up to 4 lets multi-host runs proceed in parallel.
           const urls = allCards.map((c: any) => c.url).filter(Boolean);
-          let deepScraped = 0;
+          let runId: number | null = null;
           if (urls.length > 0) {
             try {
-              await startCrawlRun(urls, {
+              runId = await startCrawlRun(urls, {
                 concurrency: msg.concurrency || 4,
                 perHostConcurrency: msg.perHostConcurrency || 1,
                 perHostDelayMs: msg.perHostDelayMs || 1500,
                 timeoutMs: msg.timeoutMs || 45000,
                 retries: msg.retries ?? 2,
               });
-              deepScraped = urls.length;
-            } catch {}
+            } catch (e) {
+              console.warn("[JH] deep-crawl would not start:", e);
+            }
           }
 
+          // `startCrawlRun` returns as soon as the run row exists; the crawl
+          // itself is deliberately not awaited. Reporting `deepScraped =
+          // urls.length` here told the operator "25/25 deep-scraped" before a
+          // single tab had opened — and if every one of them then 403'd, they
+          // had already been told the run succeeded. Report what is true now:
+          // how many were queued, and the run to watch.
           sendResponse({
             ok: true,
             totalCards: saveCount,
-            deepScraped,
+            queued: urls.length,
             totalUrls: urls.length,
+            runId,
+            pages: maxPages,
           });
           break;
         }

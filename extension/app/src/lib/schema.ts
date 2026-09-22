@@ -57,6 +57,42 @@ export function fingerprint(job: Partial<Job>): string {
   return sha1Hex(parts.join(" | ").replace(/\s+/g, " ").trim());
 }
 
+/**
+ * Fields where "longer" means nothing, so the first value found wins.
+ *
+ * Mirrors `_FIRST_WINS_FIELDS` in src/job_scraper/models.py. Longest-string-wins
+ * is a decent heuristic for prose — a full description beats a card snippet —
+ * and actively harmful everywhere else: it lets a sentence overwrite an ISO
+ * date, a tracking-laden URL beat a clean one, and a formatted salary range
+ * beat the parsed number. The Python side fixed this; this side did not, and
+ * the two write into the same table.
+ */
+export const FIRST_WINS_FIELDS: ReadonlySet<string> = new Set([
+  "posted_date",
+  "valid_through",
+  "start_date",
+  "scraped_at",
+  "salary_min",
+  "salary_max",
+  "salary_currency",
+  "salary_period",
+  "external_id",
+  "requisition_id",
+  "source_ats",
+  "source_domain",
+  "confidence",
+  "apply_url",
+  "job_url",
+  "company_website",
+  "company_logo",
+  "recruiter_email",
+  "recruiter_phone",
+  "recruiter_linkedin",
+  "application_email",
+  "application_phone",
+  "hiring_manager_email",
+]);
+
 export function mergeJobs(parts: Partial<Job>[]): Job {
   const out = emptyJob();
   for (const part of parts) {
@@ -67,7 +103,13 @@ export function mergeJobs(parts: Partial<Job>[]): Job {
       const str = Array.isArray(v) ? v.filter(Boolean).join(" | ") : String(v).trim();
       if (!str) continue;
       const cur = out[k];
-      if (!cur || str.length > cur.length) (out as any)[k] = str;
+      if (!cur) {
+        (out as any)[k] = str;
+        continue;
+      }
+      // Identifiers, dates, URLs and enums keep what they already have.
+      if (FIRST_WINS_FIELDS.has(k)) continue;
+      if (str.length > cur.length) (out as any)[k] = str;
     }
   }
   return out;

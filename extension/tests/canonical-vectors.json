@@ -1,0 +1,113 @@
+{
+  "_comment": [
+    "Golden vectors for URL canonicalisation. Asserted by BOTH sides:",
+    "  python  -> tests/test_canonical_url_parity.py",
+    "  node    -> extension/tests/canonicalUrl.test.mjs",
+    "The CLI and the extension write into the same `id` column, so if these two",
+    "implementations ever disagree, one posting becomes two rows and nothing",
+    "reports it. Seven of these cases used to diverge.",
+    "Add a case here before changing either implementation."
+  ],
+  "vectors": [
+    {
+      "why": "an ordinary URL is unchanged",
+      "in": "https://www.example.de/stellen/12345",
+      "out": "https://www.example.de/stellen/12345"
+    },
+    {
+      "why": "accented path bytes are preserved, not percent-encoded",
+      "in": "https://www.example.de/stellen/bürokauffrau-münchen",
+      "out": "https://www.example.de/stellen/bürokauffrau-münchen"
+    },
+    {
+      "why": "an already-encoded path keeps its encoding",
+      "in": "https://www.example.de/stellen/b%C3%BCrokauffrau",
+      "out": "https://www.example.de/stellen/b%C3%BCrokauffrau"
+    },
+    {
+      "why": "an IDN host is not punycoded",
+      "in": "https://münchen-jobs.de/stellen/1",
+      "out": "https://münchen-jobs.de/stellen/1"
+    },
+    {
+      "why": "the scheme and host lowercase; the path does not",
+      "in": "HTTPS://WWW.Example.DE/Stellen/Ab",
+      "out": "https://www.example.de/Stellen/Ab"
+    },
+    {
+      "why": "a default port is dropped",
+      "in": "https://acme.de:443/jobs",
+      "out": "https://acme.de/jobs"
+    },
+    {
+      "why": "a non-default port is kept",
+      "in": "https://acme.de:8443/jobs",
+      "out": "https://acme.de:8443/jobs"
+    },
+    {
+      "why": "the fragment goes",
+      "in": "https://acme.de/jobs/1#apply",
+      "out": "https://acme.de/jobs/1"
+    },
+    {
+      "why": "tracking parameters go, others stay in order",
+      "in": "https://acme.de/jobs?utm_source=news&id=7&gclid=x&page=2",
+      "out": "https://acme.de/jobs?id=7&page=2"
+    },
+    {
+      "why": "a query of nothing but tracking leaves no question mark",
+      "in": "https://acme.de/jobs?utm_source=news&fbclid=abc",
+      "out": "https://acme.de/jobs"
+    },
+    {
+      "why": "a plus in a query value is not re-encoded",
+      "in": "https://acme.de/search?q=c%2B%2B+developer",
+      "out": "https://acme.de/search?q=c%2B%2B+developer"
+    },
+    {
+      "why": "dot segments are left alone — resolving them is a normalisation only one side did",
+      "in": "https://acme.de/a/../jobs/1",
+      "out": "https://acme.de/a/../jobs/1"
+    },
+    {
+      "why": "a trailing slash is stripped",
+      "in": "https://acme.de/jobs/",
+      "out": "https://acme.de/jobs"
+    },
+    {
+      "why": "several trailing slashes are stripped",
+      "in": "https://acme.de/jobs///",
+      "out": "https://acme.de/jobs"
+    },
+    {
+      "why": "a relative URL still loses its tracking parameters",
+      "in": "/stellen/1?utm_source=news&x=1",
+      "out": "/stellen/1?x=1"
+    },
+    {
+      "why": "surrounding whitespace goes",
+      "in": "   https://acme.de/jobs/1   ",
+      "out": "https://acme.de/jobs/1"
+    },
+    {
+      "why": "an empty string stays empty",
+      "in": "",
+      "out": ""
+    },
+    {
+      "why": "a Nordic slug keeps its characters",
+      "in": "https://www.finn.no/job/fulltime/ad/utvikler-på-østlandet",
+      "out": "https://www.finn.no/job/fulltime/ad/utvikler-på-østlandet"
+    },
+    {
+      "why": "a French accented slug keeps its characters",
+      "in": "https://www.exemple.fr/emploi/développeur-sénior",
+      "out": "https://www.exemple.fr/emploi/développeur-sénior"
+    },
+    {
+      "why": "the host lowercases even with a port and userinfo present",
+      "in": "https://User@WWW.ACME.DE:443/jobs",
+      "out": "https://User@www.acme.de/jobs"
+    }
+  ]
+}

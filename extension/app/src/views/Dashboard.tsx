@@ -166,7 +166,15 @@ export function Dashboard() {
         retries: 2,
       });
       if (r?.ok) {
-        toast(`🎉 Done! ${r.totalCards} jobs found, ${r.deepScraped}/${r.totalUrls} deep-scraped.`, "green");
+        // Deliberately not "done". The deep crawl is queued, not finished —
+        // saying otherwise told operators the run had succeeded before a
+        // single page had been fetched, and a run in which every visit was
+        // refused looked identical to one that worked. Runs shows the truth.
+        toast(
+          `${r.totalCards} jobs collected from ${r.pages} page(s). ` +
+            `${r.queued} queued for deep-scrape — watch Runs for progress.`,
+          "green",
+        );
       } else {
         toast(`Pipeline failed: ${r?.error || "unknown error"}`, "red");
       }
