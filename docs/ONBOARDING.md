@@ -13,45 +13,84 @@ row is a real person's data and it is not yours to keep or forward.
 
 ---
 
-## Day one: setup (about 10 minutes)
+## Day one: setup (about 5 minutes)
 
-### 1. Install Python 3.10 or newer
+You do not need Python, Git, or a terminal after this. One command now, and one
+icon from then on.
 
-- **Windows** — [python.org/downloads](https://www.python.org/downloads/), and
-  **tick "Add python.exe to PATH"** on the first screen. It is easy to miss and
-  nothing works without it.
-- **macOS** — `brew install python@3.12`
-- **Linux** — `sudo apt install python3.12 python3.12-venv`
+### 1. Get the folder onto the machine
 
-### 2. Clone and set up
+Either a copy of the HarvestKit folder, or — if you have Git —
+`git clone https://github.com/BluOryn/HarvestKit.git`.
 
-```bash
-git clone https://github.com/BluOryn/HarvestKit.git
-cd HarvestKit
-```
+### 2. Run the installer once
 
-**Windows (PowerShell):**
+**Windows** — right-click `scripts\install.ps1` → **Run with PowerShell**, or
+in a PowerShell window in the folder:
 
 ```powershell
-.\scripts\setup.ps1
+.\scripts\install.ps1
 ```
 
 **macOS / Linux:**
 
 ```bash
-./scripts/setup.sh
+./scripts/install.sh
 ```
 
-That builds the virtualenv, installs everything, checks whether this machine can
-verify email addresses, and then **harvests ten real leads to prove it works**.
-It takes about five minutes and ends with either `Setup complete.` or a specific
-error. There is no ambiguous middle.
+It finds a Python or installs one **for your user account only** (no
+administrator rights, and it does not touch the machine's PATH, so it cannot
+break anything else you use). Then it builds the environment, installs the
+stealth browser, puts a **HarvestKit** shortcut on your desktop, and finally
+reads a dozen real European websites to prove this machine can actually scrape
+— which is a different claim from "the install finished".
 
 If PowerShell refuses to run the script:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
+
+### 3. Open it
+
+Double-click the **HarvestKit** icon on your desktop. A page opens in your
+browser with four tabs:
+
+- **Run** — every option as a labelled control. Press Start; the numbers count
+  up as it works.
+- **Results** — every file this machine has made. Open one to read it before it
+  goes anywhere, and download it with a click.
+- **Network & proxies** — where you paste proxies, and where you check whether
+  this machine can read European sites.
+- **Log** — what the run is doing, right now.
+
+Leave the small black window open while you use it. Closing it shuts the panel
+down; it does not delete anything.
+
+**If a run comes back empty, go to Network & proxies and press "Check this
+machine" before anything else.** It tells you in one screen whether the problem
+is this laptop's connection or the market, and those two have looked identical
+for far too long.
+
+### If you would rather use the terminal
+
+Everything the panel does has a command behind it, and the rest of this document
+is those commands. Nothing is panel-only.
+
+<details>
+<summary>The older terminal-first setup</summary>
+
+```powershell
+.\scripts\setup.ps1      # Windows
+```
+```bash
+./scripts/setup.sh        # macOS / Linux
+```
+
+Builds the virtualenv, installs everything, checks whether this machine can
+verify email addresses, and harvests ten real leads to prove it works.
+
+</details>
 
 ### 3. Note what setup told you about port 25
 
@@ -68,6 +107,13 @@ addresses are inferred from the company's observed format rather than confirmed
 against the mail server, and the CSV says which is which in `email_status`.
 
 ---
+
+## Every day after: one button (or one command)
+
+In the panel: open it, go to **Run**, press **Start**. It remembers yesterday's
+settings. When it finishes, **Results** has the file.
+
+The terminal equivalent:
 
 ## Every day after: one command
 
@@ -390,6 +436,25 @@ See [RUNBOOK-leads.md](RUNBOOK-leads.md) for the category ids.
 ---
 
 ## When something looks wrong
+
+**Start here, always:**
+
+```bash
+python tools/doctor.py
+```
+
+or, in the panel, **Network & proxies → Check this machine**. It reports Python,
+the dependencies, the browser, disk, the configs, your saved leads, whether this
+network allows mailbox probing, and whether real European company sites can be
+read from here. Anything marked **FAIL** will stop this machine producing leads
+and the line says how to fix it.
+
+The single most common cause of a thin file is not the market — it is this
+machine being refused by the sites. A run that harvests *nothing* now stops with
+**exit code 4** and says so, rather than quietly re-exporting yesterday's
+people.
+
+
 
 | Symptom | What it is |
 |---|---|

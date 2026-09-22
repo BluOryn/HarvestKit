@@ -8,23 +8,65 @@ fetches pages on thousands of distinct company domains. On a restricted network
 roughly half of them fail silently, and the run produces a skewed list whose
 gaps are invisible in the output.
 
+## If you would rather not use a terminal
+
+Everything in this runbook is also a button:
+
+```bash
+python run_panel.py          # or double-click HarvestKit on the desktop
+```
+
+That opens a local page with the same options as the flags below, a live view
+of the run as it happens, and the finished file to look through and download.
+It is the intended way to operate this on a machine that is not yours. The rest
+of this document is the terminal equivalent, and the two do exactly the same
+thing.
+
 ## Prerequisites
+
+On a machine with nothing installed, run `scripts/install.ps1` (Windows) or
+`scripts/install.sh` (macOS/Linux) once. It installs Python if there isn't one,
+creates the environment, and makes the desktop shortcut.
+
+Otherwise:
 
 ```bash
 pip install -r requirements.txt     # includes dnspython, needed for MX checks
 ```
 
-Verify the environment can actually reach company sites before spending hours:
+Then check the machine itself, which is the step people skip and then spend a
+day paying for:
 
 ```bash
-for h in sap.com siemens.com hellofresh.de getyourguide.com zalando.de; do
-  printf "%s %s\n" "$(curl -s -o /dev/null -w '%{http_code}' https://www.$h/ --max-time 10)" "$h"
-done
+python tools/doctor.py
 ```
 
-Anything other than `000` is fine — 301, 403 and 429 all mean the host is
-reachable. Several `000` results mean egress is filtered; fix that first or the
-run is wasted.
+It reports Python, the dependencies, the browser, disk, the configs, the saved
+leads, whether outbound port 25 is open for mailbox probing, and — the one that
+predicts whether a run yields anything — whether real European company sites
+can be read from here. Anything it marks FAIL will stop this machine producing
+leads; anything WARN will make it produce less, and the line says why.
+
+For just the network half:
+
+```bash
+python tools/check_egress.py
+```
+
+It fetches a fixed set of European company domains the way the engine does and
+reports, per host, whether a page actually came back.
+
+Do not substitute a `curl` loop that only looks at status codes. The version of
+this runbook that did said "anything other than `000` is fine — 301, 403 and
+429 all mean the host is reachable", and that is true about *reachability* and
+useless for this run: a 403 is a bot wall, and a bot wall yields no people. The
+check that matters is not "did the host answer" but "did it answer with a page".
+The same curl loop also lies on Windows, where builds without HTTP/3 return
+`000` with exit 43 for hosts that are perfectly reachable.
+
+Read the summary line. `blocked` well above zero means configure egress —
+`run.proxies`, and keep `run.use_impersonation: true` — before starting a long
+run, because those companies will be counted as delivering nobody.
 
 ## 1. Smoke run (2–3 minutes)
 
@@ -33,19 +75,39 @@ broken config or an empty funnel before the long run.
 
 ```bash
 python run_leads.py --config configs/leads/eu-it.yaml \
+    --search-keywords configs/leads/keywords.txt --countries eu \
+    --search-max-pages 1 \
     --target 10 --max-pages 3 --max-person-pages 2 --no-smtp \
     --checkpoint .cache/smoke.sqlite --output output/smoke.csv
 ```
 
-Read the `seed:` lines. If every target reports `0 listings`, stop — the seed
+**The seed flags are not optional.** `eu-it.yaml` ships with `targets: []`, and
+every seeding branch in the CLI is gated on one of `--search-keywords`,
+`--boards`, `--jobsch-pages` or `--arbeitnow-pages`. Without one the run
+completes instantly having made zero HTTP requests, prints `funnel: {}` and
+exits — and an operator on a fully bot-walled network gets byte-identical
+output to one on a perfect network. The version of this command that omitted
+them validated nothing at all. For Switzerland, substitute
+`--jobsch-pages 2 --countries CH`.
+
+Read the `seed:` lines. If the run reports `0 listings total`, stop — the seed
 API is unreachable or has moved, and no amount of waiting will help. See
 Troubleshooting.
+
+Then read the `reachability:` line, which is the one that distinguishes a thin
+market from a blocked machine. A run that harvests nothing now exits **4** and
+refuses to export, rather than quietly re-delivering yesterday's file.
 
 Then eyeball the output:
 
 ```bash
 python tools/verify_leads.py output/smoke.csv
 ```
+
+It fails a zero-row file by default. That matters: every other check in it is a
+per-row aggregation, so an empty CSV used to satisfy all of them and report
+"All hard guarantees hold."
+
 
 ## 2. Full run (1–4 hours)
 
@@ -137,10 +199,27 @@ known paths on startup and logs which one answered; if it logs that none did,
 the service has moved again and `BASE_CANDIDATES` in
 `src/job_scraper/adapters/arbeitsagentur.py` needs a new entry.
 
-**Lots of `no_person_found` in the funnel.** Companies are reachable but no
-person is being extracted. Usually means the sites in question use a layout the
-team-page parser does not recognise. Capture one failing page and add a fixture
-test before changing the parser.
+**Lots of `no_person_found` in the funnel.** Now, and only now, this means what
+it says: the site answered and named nobody the parser recognised. Capture one
+failing page and add a fixture test before changing the parser.
+
+Check `blocked_no_pages_seen` first, though. That is the separate counter for
+companies whose pages we never saw, and the run prints a `reachability:` line
+summarising it. Until this was split out, both landed in `no_person_found`, so
+a run that was simply being refused looked exactly like a parser problem — and
+this paragraph used to send you to the parser, which was innocent. If
+`blocked_no_pages_seen` is a meaningful share of the funnel, the fix is egress,
+not extraction:
+
+- confirm `run.use_impersonation: true` and that `curl_cffi` is installed;
+  without it the run logs a warning at startup and every TLS-fingerprinting site
+  stays shut
+- configure `run.proxies` — `python tools/proxy_sources.py --print-setup`
+- for the hardest sites, `run.use_stealth_browser: true`
+
+**`unreachable` climbing.** DNS failures and dead domains, usually from
+`guess_domains`. Harmless in small numbers; a large share means domain
+resolution is guessing badly for that country.
 
 **`company_error` climbing.** Check the log for the underlying exception. TLS
 failures on older German hosts are common and mostly harmless at low rates.

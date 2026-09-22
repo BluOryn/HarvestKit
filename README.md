@@ -27,6 +27,44 @@ A Chrome MV3 extension piggybacks on the real browser session to bypass DataDome
 
 ## Quick Start
 
+### The short version, for a machine with nothing on it
+
+No Python, no Git, no terminal. One command, then one icon:
+
+**Windows** — right-click `scripts/install.ps1` → *Run with PowerShell*:
+
+```powershell
+.\scripts\install.ps1
+```
+
+**macOS / Linux:**
+
+```bash
+./scripts/install.sh
+```
+
+It finds a Python or installs one for your user account (no administrator
+rights), builds the environment, installs the stealth browser, puts a
+**HarvestKit** shortcut on the desktop, and then proves the install by reading
+a dozen real European websites — because "pip install succeeded" and "this
+laptop can scrape" are different claims.
+
+After that, the whole tool is that icon. It opens a local page where the
+options are controls, the run streams live, and the finished CSV is there to
+look through and download. Nobody has to type a command:
+
+```bash
+python run_panel.py          # what the icon runs
+```
+
+Check a machine at any time:
+
+```bash
+python tools/doctor.py       # Python, deps, browser, disk, configs, network
+```
+
+### The long version
+
 ### 1. Install Python 3.10+
 
 - **Windows**: [python.org installer](https://www.python.org/downloads/) — tick "Add to PATH"
@@ -117,6 +155,34 @@ Output → `output/jobs.csv` (or whatever `exports.csv.path` says).
 
 ---
 
+## The control panel
+
+`python run_panel.py` (or the desktop shortcut) opens
+**http://127.0.0.1:8787/** — a local page with four tabs:
+
+| Tab | What it is for |
+|---|---|
+| **Run** | Every option the CLI takes, as labelled controls with the reasoning next to them. Start a harvest, watch listings/companies/people count up live, stop it if you need to. |
+| **Results** | Every CSV this machine has produced, newest first. Open one to read through it before it goes anywhere; download it with a click. |
+| **Network & proxies** | Paste proxies in, save them, check whether this machine can actually read European sites, collect and test free proxies, run the full health check. |
+| **Log** | The run's output as it happens, with the lines that matter coloured. |
+
+It remembers what you last chose, so a daily run is: open it, press Start.
+
+Some deliberate constraints, because a web UI that starts processes is easy to
+get wrong:
+
+- It listens on **127.0.0.1** only. `--host` can change that, and the page says
+  loudly what you are doing if you do.
+- Every request carries a token generated at startup, so no other page in the
+  same browser can drive it, and a Host-header check closes the DNS-rebinding
+  route to that token.
+- **There is no command box.** It runs a fixed catalogue of commands with typed,
+  range-checked options (`src/harvestkit_ui/jobs.py`). A submitted value can
+  never become a flag, a path outside the project, or a shell string. A text box
+  would be remote code execution the first time the port was reachable, and
+  "it only listens on localhost" is one firewall rule away from untrue.
+
 ## Will it work on my site?
 
 | Site type | Works? | What you need to do |
@@ -148,9 +214,26 @@ Output → `output/jobs.csv` (or whatever `exports.csv.path` says).
 run:
   # ---- Identity ----
   user_agent: "HarvestKitBot/1.0 (+https://github.com/BluOryn/HarvestKit)"
-  rotate_user_agents: true       # rotate Chrome/Firefox/Safari pool
-  obey_robots: true               # respect robots.txt (this is the default)
+  rotate_user_agents: true       # pick a browser identity per host (stable per host)
+  obey_robots: false              # default. See docs/OPERATOR-TERMS.md
+  robots_unreadable_is_allowed: true   # a robots.txt a WAF hid is not a policy
   confirm_permission: true        # required to run — acknowledge you have permission
+
+  # ---- Transport ladder (cheapest rung first) ----
+  # Rung 1: a real browser TLS/HTTP2 fingerprint via curl_cffi. The single
+  # highest-yield anti-blocking setting there is — `requests` sends a
+  # ClientHello no browser has ever sent, and that is what Akamai and
+  # Cloudflare score first. Leave this on.
+  use_impersonation: true
+  escalate_on_block: true         # retry a blocked page on a stronger rung
+  # Rung 2: a real browser, for JS-only pages and interactive challenges.
+  # ~100 MB and a second or two per page, so it stays off until asked for.
+  #   pip install patchright && patchright install chromium
+  use_stealth_browser: false
+  stealth_browser_headless: true
+  stealth_browser_concurrency: 2
+  # Which rung worked per domain, so the cost is paid once, not per URL.
+  transport_memory_path: ".cache/transport_memory.sqlite"
 
   # ---- Pacing ----
   delay_seconds: 0.3              # min spacing between requests
@@ -307,11 +390,45 @@ For unknown sites, the `generic` adapter clusters anchors by URL pattern (e.g. `
 
 ---
 
+## Egress: what to do when sites refuse you
+
+The honest ranking, all free, best first — `python tools/proxy_sources.py --print-setup`
+prints it with the exact commands:
+
+1. **Don't get flagged.** Keep `use_impersonation: true` (real Chrome TLS
+   fingerprint), `concurrency` at 8 or below, a per-host delay. Measured over
+   twelve European employer domains: plain `requests` reads 6 of 12; the same
+   machine with impersonation reads 9. No proxy involved.
+2. **Your own employees' machines.** If this is deployed on several laptops you
+   already have what residential-proxy vendors sell. Split by country rather
+   than routing: `--countries DE,AT` on one, `--countries FR,IT,ES` on another.
+   Each keeps its own checkpoint, so nothing is crawled twice.
+3. **An IPv6 /64 you already have.** Any VPS with routed IPv6 gives you 18
+   quintillion source addresses. `bind://2a01:4f8:c17:1234::a1` in `run.proxies`
+   opens ordinary direct connections *from* that address — not a proxy, so
+   nobody else carries the traffic.
+4. **A free-tier cloud VM** (Oracle Always Free never expires) reached over
+   `ssh -N -D 127.0.0.1:1080`, then `socks5h://127.0.0.1:1080`.
+5. **Cloudflare WARP** in proxy mode, for a consumer-grade address.
+6. **Tor**, then public proxy lists — last, and `--check` is not optional.
+
+`require_proxy: true` makes a run refuse to fetch rather than fall back to a
+direct connection when every proxy is cooling down. Set it on any machine whose
+own address must not be seen.
+
+What none of it fixes: a handful of sites demand residential IP reputation and
+will stay closed. Those are now reported under `blocked_no_pages_seen` instead
+of being counted as companies that named nobody.
+
 ## Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
-| Many 403 / WAF blocks | Lower `deep_per_host_concurrency: 1`, raise `deep_per_host_delay_seconds: 2.0` |
+| Many 403 / WAF blocks | First run `python tools/check_egress.py` — it says which hosts are blocked rather than merely unresponsive. Confirm `curl_cffi` is installed and `use_impersonation: true`; then configure `run.proxies` (`python tools/proxy_sources.py --print-setup`); then lower `deep_per_host_concurrency: 1` and raise `deep_per_host_delay_seconds: 2.0` |
+| Lead run reports lots of `no_person_found` | Check `blocked_no_pages_seen` and the `reachability:` line first. If that is a meaningful share, the problem is egress, not the parser — those sites were never read |
+| `impersonation rung: MISSING` at startup | `pip install curl_cffi`. Without it every TLS-fingerprinting site stays blocked |
+| A site needs JS or solves a challenge | `use_stealth_browser: true`, then `pip install patchright && patchright install chromium` |
+| `socks5://` proxy does nothing | `pip install PySocks` — `requests` needs it for SOCKS support |
 | Empty descriptions on SPA | Set `use_playwright: true` + `python -m playwright install chromium` |
 | New site returns 0 fields | Enable `llm_fallback_enabled: true` + set `ANTHROPIC_API_KEY` |
 | LLM cache stale (site changed layout) | Delete `.cache/llm_selectors.sqlite` — will re-learn next run |

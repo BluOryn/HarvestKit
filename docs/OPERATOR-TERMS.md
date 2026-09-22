@@ -40,17 +40,38 @@ at any time, and when it is, delete your copy.
 
 ## Do not make it rude
 
-The tool is deliberately polite: it honours `robots.txt`, throttles per host,
-and identifies itself. That is what keeps our IPs working and keeps us within
-what these sites permit.
+**On `robots.txt`: BluOryn has decided the tool does not consult it.** That is
+the shipped default (`obey_robots: false`) and it is a deliberate business
+decision, not an accident — so it is written down here rather than left for
+each operator to discover.
 
-**Never set `obey_robots: false`.** There is exactly one legitimate exception,
-already built in: the Swiss commercial register issues credentials, and holding
-them is the permission. Nothing else qualifies. If a source seems blocked, that
-is usually a real answer — report it rather than routing around it.
+What that decision does and does not mean:
 
-Do not raise `concurrency` past 8 or shorten the per-host delays to make a run
-finish sooner. A run that gets our address blocked costs more than a slow one.
+- robots.txt is an advisory convention, not an access control. Ignoring it is
+  not a technical circumvention and it is not hacking.
+- It does raise our exposure to a site's terms of service, and where a site has
+  expressly asked crawlers not to come, a regulator weighing our
+  legitimate-interest basis for holding EU personal data will weigh that too.
+  That is the cost BluOryn has accepted. If you are uncomfortable applying it to
+  a specific source, say so before running rather than after.
+- It changes nothing else. Every other limit below still binds.
+
+**These are not negotiable:**
+
+- **Never bypass a login, a paywall, or any access control.** robots.txt is a
+  request; a password is a boundary. Only public pages.
+- **Never disable certificate validation**, and never route traffic through a
+  proxy the tool has not validated. `tools/proxy_sources.py` exists precisely so
+  that an untrusted proxy cannot read what we fetch.
+- **Do not raise `concurrency` past 8 or shorten the per-host delays** to make a
+  run finish sooner. Per-host throttling is what keeps this a crawl rather than
+  an attack, and a run that gets our address blocked costs more than a slow one.
+- **Do not point it at a site to cause disruption.** Volume against one host is
+  the line between research and a denial of service.
+
+If a source returns blocks or captchas, report it. The run now counts those
+separately (`blocked_no_pages_seen`, and the `reachability:` line), so say what
+the number was — that is useful information, not a failure to hide.
 
 ## Sources we do not touch
 
