@@ -19,6 +19,40 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Windows PowerShell 5.1 -- still the default shell on a stock Windows box --
+# turns every stderr line of a native command into an ErrorRecord when it is
+# piped through `2>&1`. With $ErrorActionPreference = 'Stop' that first record
+# is a terminating NativeCommandError, so the script died on the very first
+# `seed:` line the run logged: no CSV, no verification, exit 1 instead of the
+# documented 0/2/3. Python's logging writes to stderr by default, so this fired
+# every single time on 5.1 and never once on pwsh 7.
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory = $true)] [string]   $Exe,
+        [Parameter(Mandatory = $true)] [string[]] $Arguments,
+        [string] $TeeTo = "",
+        [scriptblock] $Filter = $null
+    )
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        if ($TeeTo) {
+            & $Exe @Arguments 2>&1 | Tee-Object -FilePath $TeeTo
+        }
+        elseif ($Filter) {
+            & $Exe @Arguments 2>&1 | Where-Object $Filter
+        }
+        else {
+            & $Exe @Arguments 2>&1
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+    return $LASTEXITCODE
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
@@ -85,7 +119,7 @@ if (-not $SkipSmokeTest) {
         "--checkpoint", ".cache/setup-check.sqlite", "--output", "output/setup-check.csv"
     )
     if (-not $smtpOpen) { $smokeArgs += "--no-smtp" }
-    & $python @smokeArgs 2>&1 | Where-Object { $_ -notmatch "WARNING Retrying" } | Select-Object -Last 12
+    Invoke-Native -Exe $python -Arguments $smokeArgs -Filter { $_ -notmatch "WARNING Retrying" } | Select-Object -Last 12
     if (-not (Test-Path "output/setup-check.csv")) { throw "Smoke run produced no file. Setup is not complete." }
     & $python tools/verify_leads.py output/setup-check.csv
     if ($LASTEXITCODE -ne 0) { throw "Smoke run produced a file that fails verification." }

@@ -157,7 +157,11 @@ if [ "$code" = "0" ] || [ "$code" = "2" ]; then
   # hard guarantee is broken (a row missing a name, an address, a company or a
   # country); everything else it prints is a quality signal for a human.
   echo "Checking the file..."
-  if ! "$PYTHON" tools/verify_leads.py "$OUTPUT"; then
+  # --min-rows 1 is the point of the gate. Every other check here is a per-row
+  # aggregation, so a zero-row file passes all of them: 0 missing fields, 0
+  # duplicates, 0 role accounts. A blocked machine produces exactly that file,
+  # and the operator was told it was good.
+  if ! "$PYTHON" tools/verify_leads.py "$OUTPUT" --min-rows 1; then
     echo
     echo "DO NOT SEND THIS FILE. It failed verification above."
     exit 3
@@ -170,6 +174,16 @@ case "$code" in
   # Not a failure. The supply ran out before the target did, which on a daily run
   # is the normal state once the first full sweep is behind you.
   2) echo "Done, but short of $TARGET rows. See the SHORTFALL line above." ;;
+  # 4 is the one exit code that must never be read as a thin market: the run
+  # harvested *nothing*, which on a laptop means the network refused us
+  # everywhere. Reporting it as a shortfall is how an operator spends a week
+  # concluding Europe has no IT employers.
+  4)
+    echo "HARVEST FAILED: nothing was harvested at all."
+    echo "That is almost always the network, not the market. Check:"
+    echo "  $PYTHON tools/doctor.py"
+    echo "  $PYTHON tools/proxy_sources.py --print-setup"
+    ;;
   *) echo "Run failed (exit $code). Full log: $LOGFILE" ;;
 esac
 exit "$code"

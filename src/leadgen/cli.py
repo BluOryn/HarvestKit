@@ -49,7 +49,91 @@ def _build_http(config, *, robots_exempt_hosts: tuple[str, ...] = ()) -> HttpCli
         proxy_rotation=config.run.proxy_rotation,
         proxy_max_failures=config.run.proxy_max_failures,
         proxy_cooldown_seconds=config.run.proxy_cooldown_seconds,
+        use_impersonation=config.run.use_impersonation,
+        use_browser=config.run.use_stealth_browser,
+        browser_headless=config.run.stealth_browser_headless,
+        browser_concurrency=config.run.stealth_browser_concurrency,
+        escalate_on_block=config.run.escalate_on_block,
+        transport_memory_path=config.run.transport_memory_path,
+        robots_unreadable_is_allowed=config.run.robots_unreadable_is_allowed,
+        require_proxy=config.run.require_proxy,
+        index_cache_ttl_seconds=config.run.index_cache_ttl_seconds,
     )
+
+
+def _harvest_failure(listings, companies, funnel) -> str:
+    """Why this run harvested nothing, or "" when it harvested something.
+
+    The harvest and the export used to be completely decoupled: `all_leads()`
+    reads every lead ever banked, so a run in which every seed API answered 403
+    and every company domain served a bot wall still wrote a full CSV and
+    returned 0. On a fresh checkpoint the same total failure wrote a
+    header-only file and returned 2 — which `daily.sh` reports as "short of
+    target", i.e. a thin market rather than a dead network.
+    """
+    if not listings:
+        return "no seed listing was harvested at all — every seed source failed or was blocked"
+    if not companies:
+        return f"{len(listings)} listings seeded but not one company resolved to its own domain"
+    if not funnel.get("companies_with_people"):
+        blocked = funnel.get("blocked_no_pages_seen", 0)
+        unreachable = funnel.get("unreachable", 0)
+        detail = (
+            f" ({blocked} were blocked before any page was read, {unreachable} were unreachable)"
+            if blocked or unreachable
+            else ""
+        )
+        return f"{len(companies)} companies crawled and none named a single person{detail}"
+    return ""
+
+
+def _report_blocking(funnel, http) -> None:
+    """Say plainly how much of the run was refused rather than empty.
+
+    The funnel Counter is accurate but easy to skim past. A run whose companies
+    were mostly walled looks, in the delivered CSV, exactly like a run in a
+    thin market — so the difference has to be stated, not left to be inferred.
+    """
+    walled = funnel.get("blocked_no_pages_seen", 0)
+    unreachable = funnel.get("unreachable", 0)
+    empty = funnel.get("no_person_found", 0)
+    with_people = funnel.get("companies_with_people", 0)
+    attempted = walled + unreachable + empty + with_people
+    if not attempted:
+        return
+
+    share = 100.0 * walled / attempted
+    log.info(
+        "reachability: %d/%d companies (%.0f%%) were blocked before any page was read; "
+        "%d were unreachable; %d answered but named nobody; %d yielded people",
+        walled,
+        attempted,
+        share,
+        unreachable,
+        empty,
+        with_people,
+    )
+    if share >= 20.0:
+        log.warning(
+            "reachability: %.0f%% of companies were blocked. That is an egress problem, not a "
+            "parser problem — the team-page parser never saw those sites. Configure "
+            "run.proxies (see tools/proxy_sources.py) and keep run.use_impersonation on.",
+            share,
+        )
+        if not getattr(http, "has_proxies", False):
+            log.warning(
+                "reachability: this run used no proxies at all, so every request came from one "
+                "address. A single address is what a WAF rate-limits first."
+            )
+    stats = getattr(http, "transport_stats", None)
+    if callable(stats):
+        escalated = [row for row in stats() if row.get("rung", 0) > 0]
+        if escalated:
+            log.info(
+                "transport: %d domains needed a stronger client than plain requests "
+                "(remembered for next run)",
+                len(escalated),
+            )
 
 
 def _read_lines(path: str) -> list[str]:
@@ -281,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
             "https://www.zefix.admin.ch/en/search/entity/welcome",
         )
 
+    harvest_failure = ""
     try:
         if not args.select_only:
             # The register API disallows anonymous crawlers in robots.txt and
@@ -389,8 +474,31 @@ def main(argv: list[str] | None = None) -> int:
                     recrawl_after_days=args.recrawl_after or None,
                 )
                 log.info("funnel: %s", dict(funnel))
+                _report_blocking(funnel, http)
+                harvest_failure = _harvest_failure(listings, companies, funnel)
             finally:
                 http.close()
+
+        if harvest_failure:
+            # Exporting here would write a full, successful-looking CSV of
+            # leads banked on an earlier day and exit 0. That is the single
+            # worst failure this tool can have: the operator ships yesterday's
+            # file believing it is today's, and nothing anywhere says otherwise.
+            # A blocked network is precisely when this happens, and precisely
+            # when the checkpoint is fullest.
+            print()
+            print(f"HARVEST FAILED: {harvest_failure}")
+            print(
+                "Refusing to export. The checkpoint still holds earlier leads, and writing "
+                "them now would look like a successful run."
+            )
+            print(
+                "Run `python tools/check_egress.py` to see whether this machine can read "
+                "European sites at all, then `--select-only` if you really do want to "
+                "re-cut the existing checkpoint."
+            )
+            checkpoint.close()
+            return 4
 
         families = (
             None

@@ -75,6 +75,40 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+# Windows PowerShell 5.1 -- still the default shell on a stock Windows box --
+# turns every stderr line of a native command into an ErrorRecord when it is
+# piped through `2>&1`. With $ErrorActionPreference = 'Stop' that first record
+# is a terminating NativeCommandError, so the script died on the very first
+# `seed:` line the run logged: no CSV, no verification, exit 1 instead of the
+# documented 0/2/3. Python's logging writes to stderr by default, so this fired
+# every single time on 5.1 and never once on pwsh 7.
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory = $true)] [string]   $Exe,
+        [Parameter(Mandatory = $true)] [string[]] $Arguments,
+        [string] $TeeTo = "",
+        [scriptblock] $Filter = $null
+    )
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        if ($TeeTo) {
+            & $Exe @Arguments 2>&1 | Tee-Object -FilePath $TeeTo
+        }
+        elseif ($Filter) {
+            & $Exe @Arguments 2>&1 | Where-Object $Filter
+        }
+        else {
+            & $Exe @Arguments 2>&1
+        }
+    }
+    finally {
+        $ErrorActionPreference = $previous
+    }
+    return $LASTEXITCODE
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
@@ -161,7 +195,7 @@ Write-Host "  output     : $output"
 Write-Host "  log        : $logFile"
 Write-Host ""
 
-& $python @leadArgs 2>&1 | Tee-Object -FilePath $logFile
+Invoke-Native -Exe $python -Arguments $leadArgs -TeeTo $logFile | Out-Null
 $code = $LASTEXITCODE
 
 Write-Host ""
@@ -170,7 +204,10 @@ if ($code -eq 0 -or $code -eq 2) {
     # hard guarantee is broken (a row missing a name, an address, a company or a
     # country); everything else it prints is a quality signal for a human.
     Write-Host "Checking the file..." -ForegroundColor Cyan
-    & $python (Join-Path $root "tools/verify_leads.py") $output
+    # --min-rows 1 is the point of the gate: every other check is a per-row
+    # aggregation, so a zero-row file passes all of them, and a blocked machine
+    # produces exactly that file.
+    & $python (Join-Path $root "tools/verify_leads.py") $output --min-rows 1
     if ($LASTEXITCODE -ne 0) {
         Write-Host ""
         Write-Host "DO NOT SEND THIS FILE. It failed verification above." -ForegroundColor Red
@@ -184,6 +221,14 @@ if ($code -eq 0) {
     # Not a failure. The supply ran out before the target did, which on a daily
     # run is the normal state once the first full sweep is behind you.
     Write-Host "Done, but short of $Target rows. See the SHORTFALL line above." -ForegroundColor Yellow
+} elseif ($code -eq 4) {
+    # The one exit code that must never read as a thin market: the run
+    # harvested nothing, which on a laptop means the network refused us
+    # everywhere.
+    Write-Host "HARVEST FAILED: nothing was harvested at all." -ForegroundColor Red
+    Write-Host "That is almost always the network, not the market. Check:" -ForegroundColor Yellow
+    Write-Host "  python tools\doctor.py"
+    Write-Host "  python tools\proxy_sources.py --print-setup"
 } else {
     Write-Host "Run failed (exit $code). Full log: $logFile" -ForegroundColor Red
 }

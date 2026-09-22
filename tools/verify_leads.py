@@ -23,6 +23,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Verify a lead CSV.")
     parser.add_argument("path")
     parser.add_argument("--expect", type=int, default=0, help="row count the run promised")
+    parser.add_argument(
+        "--min-rows",
+        type=int,
+        default=1,
+        help="fail below this many rows. Defaults to 1: a zero-row delivery passes every "
+        "per-row check there is, and is the exact file a bot-walled machine produces",
+    )
     args = parser.parse_args(argv)
 
     with open(args.path, encoding="utf-8-sig", newline="") as handle:
@@ -31,6 +38,20 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
 
     print(f"rows: {len(rows)}")
+    # Every other check here is a per-row aggregation, so an empty file passes
+    # all of them: 0 missing fields, 0 duplicates, 0 role accounts. The daily
+    # scripts treat exit 0 as "the file is good" and hand it over. A zero-row
+    # delivery is the one output that must never pass a gate whose entire
+    # purpose is to stop bad files reaching a buyer.
+    if len(rows) < max(0, args.min_rows):
+        print()
+        print("FAILED:")
+        print(f"  - {len(rows)} rows, fewer than the {args.min_rows} required")
+        print(
+            "    A run that harvested nothing writes this. Check the `reachability:` line "
+            "in the run log and try `python tools/check_egress.py`."
+        )
+        return 1
     if args.expect and len(rows) != args.expect:
         failures.append(f"expected {args.expect} rows, found {len(rows)}")
 
