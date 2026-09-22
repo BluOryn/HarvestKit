@@ -208,13 +208,24 @@ them removed a company rather than degrading it.
 
 ### Fixed — seeds and dispatch
 
-- **SmartRecruiters was capped at ~98 rows per keyword** out of up to 40,422.
+- **SmartRecruiters was capped at ~98 rows per keyword** out of up to 48,946.
   The search endpoint clamps `limit` and ignores `offset`, `page` and
   `pageSize` outright — verified live, the same 99 rows come back at every
-  offset — and the log printed that 99 as though it were the answer. The
-  shortfall is now logged, and each employer the search names is expanded
-  through the documented per-company postings API, which does paginate.
-  Measured: one keyword went from 23 listings to 1,653.
+  offset — and the log printed that 99 as though it were the answer, so
+  nothing in a run told the operator a larger result set existed. It is
+  logged now, from the response's own `totalFound`.
+  - The fix that suggests itself — expand each employer through the
+    per-company postings API, which does honour `offset` — is the wrong
+    lever, and measuring it said so: one sweep turned 223 listings into
+    14,786, **all belonging to the same 66 employers**. For a lead run that
+    is hundreds of requests spent to add zero companies, and SmartRecruiters
+    postings carry no description and no employer website, so the extra rows
+    help neither ad-mining nor domain resolution. Expansion is therefore
+    opt-in (`expand_companies`), for when the postings themselves are what
+    you want.
+  - What actually widens this seed is **more keywords**. Measured over eight:
+    19 distinct employers, then 64, 68, 82, 88, 95, 123, 140 — still adding
+    17 new ones on the eighth. `keywords-multilingual.txt` ships 80.
 - **Greenhouse's real company name was overwritten with the board slug**, so
   leads shipped under "addepar1" and that string was fed to the domain guesser,
   where the account-disambiguation digit NXDOMAINs on every TLD.

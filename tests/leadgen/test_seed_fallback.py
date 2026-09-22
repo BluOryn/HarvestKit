@@ -109,3 +109,18 @@ def test_explicit_multilingual_keywords_still_win(monkeypatch):
         concurrency=1,
     )
     assert seen == [["Softwareentwickler"]]
+
+
+def test_company_expansion_is_off_by_default():
+    """It deepens the seed without widening it, and the seed's output is
+    companies. One measured sweep turned 223 listings into 14,786 — all of them
+    belonging to the same 66 employers, for hundreds of extra requests."""
+    http = OnlySmartRecruiters()
+    jobsearch.search_smartrecruiters(http, keywords=["Softwareentwickler"])
+    assert not any("/postings" in call for call in http.calls)
+
+
+def test_company_expansion_happens_when_it_is_asked_for():
+    http = OnlySmartRecruiters()
+    jobsearch.search_smartrecruiters(http, keywords=["Softwareentwickler"], expand_companies=True)
+    assert any("/postings" in call for call in http.calls)

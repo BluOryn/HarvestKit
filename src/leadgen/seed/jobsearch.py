@@ -49,8 +49,8 @@ SMARTRECRUITERS_LIMIT = 100
 SMARTRECRUITERS_POSTINGS_URL = "https://api.smartrecruiters.com/v1/companies/{slug}/postings"
 #: Public posting page, for the rows the postings API returns without one.
 SMARTRECRUITERS_JOB_URL = "https://jobs.smartrecruiters.com/{slug}/{job_id}"
-#: How many distinct employers one keyword sweep may expand. Each costs a
-#: request per 100 postings, so this bounds the sweep rather than the market.
+#: How many distinct employers one keyword sweep may expand, when expansion is
+#: asked for at all. Each costs a request per 100 postings.
 SMARTRECRUITERS_MAX_COMPANIES = 120
 SMARTRECRUITERS_MAX_PAGES_PER_COMPANY = 5
 
@@ -216,18 +216,38 @@ def _smartrecruiters_company(http, slug: str) -> list:
     return found
 
 
-def search_smartrecruiters(http, *, keywords: list[str], limit: int = SMARTRECRUITERS_LIMIT) -> list:
-    """One query per keyword, then the full posting list of each employer found.
+def search_smartrecruiters(
+    http,
+    *,
+    keywords: list[str],
+    limit: int = SMARTRECRUITERS_LIMIT,
+    expand_companies: bool = False,
+) -> list:
+    """One query per keyword. Optionally, every posting of each employer found.
 
     `sr-jobs/search` is a fixed teaser: it clamps `limit` to ~98 and ignores
     `offset`, `page` and `pageSize` outright — measured live, keyword "Engineer"
     reports `totalFound: 40422` and returns 99 rows at every offset. The log
-    line used to print that 99 as though it were the answer.
+    line used to print that 99 as though it were the answer, so nothing in a run
+    told the operator a larger result set existed. It is logged now.
 
-    So the search is used for what it is good at — naming employers — and each
-    employer is then expanded through the documented per-company postings API,
-    which does honour `offset`. The shortfall is logged either way, because an
-    operator who cannot see it will conclude the market is thin.
+    **`expand_companies` is off by default, and the reason is worth stating,
+    because the obvious intuition is wrong.** Expanding each employer through
+    the per-company postings API — which does honour `offset` — multiplies
+    *postings*, not *employers*: one measured sweep turned 223 listings into
+    14,786, all of them belonging to the same 66 companies. For a lead run that
+    is hundreds of requests spent to add zero companies, because the seed's
+    output is companies. SmartRecruiters postings also carry no description and
+    no employer website, so the extra rows contribute nothing to ad-mining or
+    to domain resolution either.
+
+    What actually widens this seed is **more keywords**. Measured over eight:
+    19 companies, then 64, 68, 82, 88, 95, 123, 140 cumulative — still adding
+    17 new employers on the eighth. `configs/leads/keywords-multilingual.txt`
+    ships 80 of them for exactly this reason.
+
+    Turn expansion on when you want the postings themselves (a job-ad harvest
+    rather than a lead run).
     """
     listings: list[JobListing] = []
     seen_companies: dict[str, str] = {}
@@ -251,6 +271,16 @@ def search_smartrecruiters(http, *, keywords: list[str], limit: int = SMARTRECRU
         else:
             log.info("jobsearch: smartrecruiters %-24s %4d jobs", keyword, len(rows))
 
+    log.info(
+        "jobsearch: smartrecruiters named %d distinct employers across %d keywords "
+        "(more keywords is what widens this, not more pages)",
+        len(seen_companies),
+        len(keywords),
+    )
+
+    if not expand_companies:
+        return listings
+
     expanded = 0
     for slug in list(seen_companies)[:SMARTRECRUITERS_MAX_COMPANIES]:
         try:
@@ -262,7 +292,8 @@ def search_smartrecruiters(http, *, keywords: list[str], limit: int = SMARTRECRU
         expanded += len(rows)
     if seen_companies:
         log.info(
-            "jobsearch: smartrecruiters expanded %d employers into %d further postings",
+            "jobsearch: smartrecruiters expanded %d employers into %d further postings "
+            "(no new employers — this deepens, it does not widen)",
             min(len(seen_companies), SMARTRECRUITERS_MAX_COMPANIES),
             expanded,
         )
