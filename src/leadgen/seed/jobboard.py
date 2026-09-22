@@ -14,7 +14,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from ..assemble import CompanyContext
-from ..company.domain import resolve_domain
+from ..company.domain import resolve_site
 from ..email.validate import is_role_account
 from ..geo import country_from_location
 from ..person.jobad import contacts_from_ad
@@ -166,11 +166,18 @@ def companies_from_listings(
     def build(group: list) -> CompanyContext | None:
         first = group[0]
         hints: list[str] = []
+        # A `company_website` is the source *asserting* the employer's site.
+        # An apply_url is a link that happens to be nearby. Keeping the two
+        # apart lets a stated site survive a homepage that answers 403 — which
+        # four of six European employer domains do.
+        stated: list[str] = []
         for listing in group:
             for attribute in ("company_website", "apply_url", "job_url"):
                 url = getattr(listing, attribute, "") or ""
                 if url:
                     hints.append(url)
+                    if attribute == "company_website":
+                        stated.append(url)
 
         if guess_domains is not None:
             # Guesses go last and are ordered by the company's own market, so a
@@ -178,10 +185,18 @@ def companies_from_listings(
             # company is looked for on .ch before .com.
             hints.extend(guess_domains(_ats_slug(first) or first.company, first.company, country_of(group)))
 
-        domain = resolve_domain(first.company, hints, http)
+        site = resolve_site(first.company, hints, http, stated=stated)
+        domain = site.domain
         if not domain:
-            log.debug("seed: no own-domain for %r, dropping", first.company)
+            # INFO, not DEBUG: a company silently vanishing here was the single
+            # largest unexplained gap between "listings seeded" and "companies
+            # crawled", and the operator had no way to see it.
+            log.info("seed: no own-domain for %r (tried %d hints), dropping", first.company, len(hints))
             return None
+        if site.blocked:
+            log.info("seed: %r resolved to %s behind a bot wall — kept", first.company, site.host)
+        if not site.corroborated:
+            log.debug("seed: %r -> %s accepted without name corroboration", first.company, site.host)
 
         # The ads are already in hand, so mining them for a named contact costs
         # no request. Capped because a company with sixty ads repeating the same
@@ -224,7 +239,10 @@ def companies_from_listings(
         return CompanyContext(
             name=first.company,
             domain=domain,
-            website=f"https://{domain}",
+            # The site to crawl is the host that answered; the mail domain is
+            # its registrable parent. `careers.acme.com` and `acme.com` are the
+            # same company but only one of them has MX.
+            website=site.website or f"https://{domain}",
             country=country_of(group),
             region=_first(getattr(item, "region", "") for item in group),
             city=_first(getattr(item, "city", "") for item in group),

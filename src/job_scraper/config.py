@@ -36,8 +36,33 @@ class RunConfig:
     delay_seconds: float = 1.0
     max_pages: int = 200
     max_depth: int = 3
-    obey_robots: bool = True
+    # Off by default at the operator's instruction. robots.txt is advisory, not
+    # an access control, but ignoring it does raise ToS exposure and weakens the
+    # legitimate-interest argument for collecting personal data in the EU — so
+    # it stays a switch rather than something hard-coded, and
+    # docs/OPERATOR-TERMS.md records what turning it on and off means.
+    obey_robots: bool = False
+    # When robots IS obeyed: a robots.txt we could not read expresses no policy.
+    # RFC 9309 says to treat an unavailable one as a blanket disallow, which is
+    # right when the site is refusing us and wrong when a WAF is. Measured over
+    # twelve EU company domains, three were being written off entirely on the
+    # strength of a bot wall's 403. See src/job_scraper/robots.py.
+    robots_unreadable_is_allowed: bool = True
     use_playwright: bool = False
+    # ---- Transport ladder (see src/job_scraper/transport.py) ----
+    # Rung 1: a real browser TLS/HTTP2 fingerprint via curl_cffi. Cheap, and the
+    # single highest-yield anti-blocking measure available — `requests` presents
+    # a ClientHello no browser has ever sent, which is what Akamai and Cloudflare
+    # score first.
+    use_impersonation: bool = True
+    # Rung 2: a real browser, for JS-only pages and interactive challenges.
+    # Costs ~100 MB and a second or two per page, so it stays off until asked.
+    use_stealth_browser: bool = False
+    stealth_browser_headless: bool = True
+    stealth_browser_concurrency: int = 2
+    # Whether a blocked response may be retried on a stronger rung at all.
+    escalate_on_block: bool = True
+    transport_memory_path: str = ".cache/transport_memory.sqlite"
     allow_domains: list[str] = field(default_factory=list)
     confirm_permission: bool = False
     # Deep-scrape: visit each posting's detail page after listing/feed parse
@@ -54,12 +79,21 @@ class RunConfig:
     rotate_user_agents: bool = True
     # Proxy rotation: list of "http://user:pass@host:port" or "socks5://host:port".
     # Empty list = direct connection. `proxies_file` points at a newline-delimited
-    # file (the format tools/fetch_free_proxies.py writes) and is merged in.
+    # file (the format tools/proxy_sources.py writes) and is merged in.
     proxies: list[str] = field(default_factory=list)
     proxies_file: str = ""
     proxy_rotation: str = "round_robin"  # round_robin | random
     proxy_max_failures: int = 3  # mark proxy dead after N consecutive fails
     proxy_cooldown_seconds: int = 300  # before retrying a dead proxy
+    # Fail closed. With proxies configured and every one of them cooling down,
+    # refuse the fetch instead of connecting directly. On a machine that must
+    # never be seen from, a silent direct fallback is not degradation — it is
+    # the leak the pool existed to prevent, arriving at the worst moment.
+    require_proxy: bool = False
+    # Index and search URLs are stable strings whose contents change daily.
+    # Serving them from the 24 h page cache made `--only-new` return nothing on
+    # a daily run, so they get their own, much shorter, freshness ceiling.
+    index_cache_ttl_seconds: int = 3600
     # LLM-fallback adapter — when the heuristic extractor fills < llm_min_fields
     # fields, call Anthropic Haiku to infer a selector map. Cached per host.
     llm_fallback_enabled: bool = False

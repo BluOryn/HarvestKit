@@ -8,3 +8,14 @@ tldextract>=5.1.2
 playwright>=1.45.0
 gspread>=6.1.2
 google-auth>=2.33.0
+# Presents a real browser's TLS + HTTP/2 fingerprint. This is the single
+# highest-yield anti-blocking measure available: `requests` sends a ClientHello
+# no browser has ever produced, which is the first thing Akamai and Cloudflare
+# score. Measured on sixteen EU company domains, adding it recovered three that
+# `requests` could not fetch at all. Without it the engine still runs — the
+# impersonation rung simply reports itself unavailable and logs why.
+curl_cffi>=0.7.0
+# SOCKS5 proxy support for `requests`. Needed for `socks5h://` entries in
+# run.proxies, which is what an SSH tunnel to a free-tier VM gives you — see
+# `python tools/proxy_sources.py --print-setup`.
+PySocks>=1.7.1

@@ -31,18 +31,22 @@ from .http import HostThrottle, HttpClient
 from .models import JobListing
 from .universal import mine_contacts, universal_extract
 
-# Playwright's sync API is bound to the greenlet that created it — calling
-# .get() from two ThreadPoolExecutor workers raises
-# "Playwright Sync API inside asyncio/another thread". Every deep-scrape worker
-# shares one fetcher, so serialize access behind a module-level lock.
-_PLAYWRIGHT_LOCK = threading.Lock()
+# Playwright's sync API is pinned to the greenlet that created it, and a lock
+# does not fix that: a second thread calling in raises `greenlet.error` whether
+# or not it holds one. Every call from this pool used to raise, and the raise
+# was caught at DEBUG, so `use_playwright: true` looked enabled while fetching
+# nothing. PlaywrightFetcher now runs the driver on its own owner thread
+# (job_scraper.browser.BrowserWorker), so calls from here are genuinely safe.
+# The semaphore that remains is a *cost* control, not a correctness one: two
+# browser contexts at a time, not one per worker.
+_PLAYWRIGHT_SLOTS = threading.Semaphore(2)
 
 
 def _playwright_get(fetcher: object, url: str) -> tuple[str, str] | None:
-    """Thread-safe wrapper around PlaywrightFetcher.get()."""
+    """Fetch through the browser, bounded to a couple of contexts at a time."""
     if fetcher is None:
         return None
-    with _PLAYWRIGHT_LOCK:
+    with _PLAYWRIGHT_SLOTS:
         return fetcher.get(url)  # type: ignore[attr-defined]
 
 
@@ -237,7 +241,20 @@ def deep_scrape_jobs(
     with ThreadPoolExecutor(max_workers=cfg.concurrency) as pool:
         futures = {pool.submit(_scrape_one, j): j for j in listings}
         for fut in as_completed(futures):
-            ok_flag, reason = fut.result()
+            try:
+                ok_flag, reason = fut.result()
+            except Exception as exc:
+                # One listing raising is one listing lost, not the run. This
+                # used to propagate out of `as_completed`, abandoning every
+                # job already scraped in the batch and aborting the whole run
+                # on a single malformed page.
+                ok_flag, reason = False, f"exception:{type(exc).__name__}: {exc}"
+                logging.warning(
+                    "deep-scrape: %s raised %s: %s",
+                    (futures[fut].job_url or futures[fut].apply_url or "?"),
+                    type(exc).__name__,
+                    exc,
+                )
             with progress_lock:
                 done += 1
                 if ok_flag:

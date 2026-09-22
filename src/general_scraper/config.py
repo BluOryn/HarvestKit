@@ -27,7 +27,8 @@ class GeneralRunConfig:
     user_agent: str = "HarvestKitBot/1.0 (+https://github.com/BluOryn/HarvestKit)"
     delay_seconds: float = 1.0
     max_pages: int = 5
-    obey_robots: bool = True
+    obey_robots: bool = False
+    robots_unreadable_is_allowed: bool = True
     confirm_permission: bool = False
     use_playwright: bool = False
     deep_scrape: bool = True
@@ -35,6 +36,15 @@ class GeneralRunConfig:
     cache_ttl_seconds: int = 86400
     cache_path: str = ".cache/general_http_cache.sqlite"
     rotate_user_agents: bool = True
+    # Mirrors job_scraper.config.RunConfig — the two products share one
+    # HttpClient, so they must offer it the same knobs or general-mode runs
+    # silently lose the escalation ladder.
+    use_impersonation: bool = True
+    use_stealth_browser: bool = False
+    stealth_browser_headless: bool = True
+    stealth_browser_concurrency: int = 2
+    escalate_on_block: bool = True
+    transport_memory_path: str = ".cache/transport_memory.sqlite"
 
 
 @dataclass

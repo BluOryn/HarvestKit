@@ -23,6 +23,7 @@ import json
 import logging
 import os
 import random
+import re
 import sqlite3
 import threading
 import time
@@ -37,7 +38,10 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from .identity import IDENTITY_POOL, country_for_host, headers_for, identity_for
 from .robots import RobotsCache
+from .transport import FetchResponse as FetchResponse  # re-exported for callers
+from .transport import Outcome, build_ladder, registrable_domain
 
 _BLOCK_KEYWORDS = (
     "request could not be satisfied",
@@ -106,15 +110,150 @@ def _retry_after_seconds(header: str | None) -> float:
     return max(0.0, min(delta, _MAX_RETRY_AFTER_SECONDS))
 
 
-DEFAULT_UA_POOL = [
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_2) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
-]
+#: Sourced from `identity.IDENTITY_POOL` so the User-Agent, the client hints
+#: and the TLS fingerprint always describe the same browser. The hand-written
+#: list this replaced was pinned to Chrome 120 and Firefox 121 — both released
+#: in late 2023, and by now old enough that the version alone draws attention.
+DEFAULT_UA_POOL = [entry.user_agent for entry in IDENTITY_POOL]
+
+
+#: URL shapes that enumerate rather than describe. A board's `/jobs` feed, a
+#: search with a `page=` or `offset=`, an ATS `postings` endpoint: the string is
+#: stable and the contents change every day, so caching them for the page TTL
+#: (24 h, or 7 d where configured) meant a daily run re-read a stale snapshot
+#: and `--only-new` legitimately found nothing new. Detail pages are unaffected
+#: and keep the long TTL, which is where the cache earns its keep.
+_INDEX_PATH_MARKERS: tuple[str, ...] = (
+    "/jobs",
+    "/job-search",
+    "/jobsearch",
+    "/search",
+    "/suche",
+    "/recherche",
+    "/postings",
+    "/positions",
+    "/vacancies",
+    "/openings",
+    "/stellenangebote",
+    "/stellen",
+    "/offres",
+    "/offerte",
+    "/vacatures",
+    "/ledige-stillinger",
+    "/karriere",
+    "/careers",
+    "/sitemap",
+    "/search.json",
+    "/feed",
+    "/rss",
+)
+_INDEX_QUERY_KEYS: frozenset[str] = frozenset(
+    {
+        "page",
+        "p",
+        "offset",
+        "from",
+        "start",
+        "skip",
+        "cursor",
+        "keyword",
+        "keywords",
+        "q",
+        "query",
+        "search",
+        "pageno",
+        "seite",
+    }
+)
+
+
+#: Collection endpoints where the *last* segment is the board slug rather than a
+#: document, so the "ends with a marker" rule below cannot see them. Listed
+#: explicitly rather than guessed at: a rule loose enough to catch
+#: `/v0/postings/<slug>` also catches `/karriere/stelle/<id>`, which is a
+#: detail page and belongs in the long cache.
+_INDEX_URL_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"/v\d+/postings/[^/]+/?$", re.I),  # Lever
+    re.compile(r"/v\d+/boards/[^/]+(?:/jobs)?/?$", re.I),  # Greenhouse
+    re.compile(r"/sr-jobs/search", re.I),  # SmartRecruiters
+    re.compile(r"/api/v\d+/jobs", re.I),  # Workable
+    re.compile(r"/spa/jobboerse/", re.I),  # Arbeitsagentur
+)
+
+
+def _looks_like_index(url: str) -> bool:
+    """True for a listing/search URL, whose cached copy goes stale in hours."""
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    path = (parsed.path or "").rstrip("/").lower()
+    # Only the *last* segments count. A detail page living under /karriere/ is
+    # still a detail page, and giving it the short TTL would re-fetch thousands
+    # of stable pages for nothing.
+    trimmed = re.sub(r"/(?:page/)?\d+$", "", path)
+    if any(trimmed.endswith(marker) for marker in _INDEX_PATH_MARKERS):
+        return True
+    if any(pattern.search(path) for pattern in _INDEX_URL_PATTERNS):
+        return True
+    if parsed.query:
+        keys = {piece.split("=", 1)[0].lower() for piece in parsed.query.split("&") if piece}
+        return bool(keys & _INDEX_QUERY_KEYS)
+    return False
+
+
+#: An egress entry of this shape means "connect directly, but from this local
+#: address". It is not a proxy at all, and it is the cheapest genuine rotation
+#: available: a host with a routed IPv6 /64 — which Oracle's always-free tier,
+#: Hetzner, OVH and most VPS providers hand out at no charge — owns 18 quintillion
+#: source addresses. Each one is a distinct client as far as any rate limiter is
+#: concerned, and no third party carries the traffic, so none of the trust
+#: problems of a borrowed proxy apply.
+#:
+#:     bind://2a01:4f8:c17:1234::7
+#:     bind://[2a01:4f8:c17:1234::7]
+BIND_SCHEME = "bind://"
+
+
+def _bind_address(entry_url: str) -> str:
+    """The local address in a `bind://` entry, or "" if it is a real proxy."""
+    if not entry_url.lower().startswith(BIND_SCHEME):
+        return ""
+    return entry_url[len(BIND_SCHEME) :].strip().strip("[]").split("/")[0]
+
+
+class _SourceBoundAdapter(HTTPAdapter):
+    """An adapter that opens every connection from one local address."""
+
+    def __init__(self, source_address: str, **kwargs: Any) -> None:
+        self._source = (source_address, 0)
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, *args: Any, **kwargs: Any) -> None:
+        kwargs["source_address"] = self._source
+        super().init_poolmanager(*args, **kwargs)
+
+    def proxy_manager_for(self, proxy: str, **kwargs: Any) -> Any:
+        kwargs["source_address"] = self._source
+        return super().proxy_manager_for(proxy, **kwargs)
+
+
+def _configured_session(retry: Retry, source_address: str = "") -> requests.Session:
+    """A Session with our retry policy and pool sizing, and nothing else.
+
+    Deliberately not a copy of an existing session: the point is that it starts
+    with an empty cookie jar.
+    """
+    session = requests.Session()
+    if source_address:
+        adapter: HTTPAdapter = _SourceBoundAdapter(
+            source_address, max_retries=retry, pool_connections=10, pool_maxsize=20
+        )
+    else:
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=20)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 
 class _ProxyPool:
@@ -133,6 +272,8 @@ class _ProxyPool:
         rotation: str = "round_robin",
         max_failures: int = 3,
         cooldown_seconds: int = 300,
+        *,
+        require_proxy: bool = False,
     ) -> None:
         self.entries: list[dict[str, Any]] = [
             {"url": p.strip(), "failures": 0, "dead_until": 0.0, "uses": 0}
@@ -144,19 +285,41 @@ class _ProxyPool:
         self.cooldown_seconds = max(1, cooldown_seconds)
         self._lock = threading.Lock()
         self._cursor = 0
-        self._exhausted_warned = False
         # Per-proxy cookie jar — each proxy = its own browser session.
         self._jars: dict[str, requests.cookies.RequestsCookieJar] = {}
+        self._exhausted_warned = False
+        #: Fail closed. When every proxy is cooling down, refuse the fetch
+        #: rather than connecting directly. Falling back to a direct connection
+        #: is not a graceful degradation on a machine that must never be seen —
+        #: it is the exact leak the pool exists to prevent, and it happened
+        #: silently on the worst possible occasion, when the pool had just been
+        #: burned by the host now being requested.
+        self.require_proxy = bool(require_proxy)
+        #: Distinct registrable domains that refused this proxy recently. A
+        #: single host walling us says nothing about the proxy; the same proxy
+        #: being walled by several unrelated domains says its IP is burned.
+        self._blocked_domains: dict[str, dict[str, float]] = {}
 
     def __bool__(self) -> bool:
         return bool(self.entries)
+
+    @property
+    def exhausted(self) -> bool:
+        """True when proxies are configured but none is currently usable."""
+        if not self.entries:
+            return False
+        now = time.time()
+        with self._lock:
+            return all(entry["dead_until"] > now for entry in self.entries)
 
     def acquire(self) -> dict[str, Any] | None:
         """Return a live proxy, or None when every proxy is cooling down.
 
         None makes the caller fall back to a direct connection, which leaks the
         real egress IP — so warn loudly (once per exhaustion event) rather than
-        failing over silently.
+        failing over silently. With `require_proxy` set, the caller refuses the
+        fetch instead; `exhausted` is how it tells "no proxies configured"
+        (direct is intended) from "every proxy is dead" (direct is a leak).
         """
         if not self.entries:
             return None
@@ -197,6 +360,11 @@ class _ProxyPool:
             entry["failures"] = 0
 
     def report_failure(self, entry: dict[str, Any] | None) -> None:
+        """Charge a *transport* failure to this proxy.
+
+        Connect refused, TLS failure, proxy auth rejected, timeout: all of those
+        are the proxy's fault and count directly.
+        """
         if entry is None:
             return
         with self._lock:
@@ -206,7 +374,49 @@ class _ProxyPool:
                 entry["failures"] = 0
                 logging.info("proxy %s cooled down for %ds", entry["url"], self.cooldown_seconds)
 
+    def report_block(self, entry: dict[str, Any] | None, domain: str) -> None:
+        """Charge a *host-side* refusal — 403, 429, a challenge page.
+
+        These used to be counted like a transport failure, so three walled
+        pages on one stubborn site cooled down every proxy in the pool and the
+        whole run fell back to a direct connection. A host refusing a request
+        is overwhelmingly about the host, not the exit IP; it only implicates
+        the proxy when several unrelated domains refuse the same one.
+        """
+        if entry is None:
+            return
+        domain = (domain or "").lower()
+        if not domain:
+            return
+        now = time.time()
+        with self._lock:
+            seen = self._blocked_domains.setdefault(entry["url"], {})
+            seen[domain] = now
+            # Only recent evidence counts: a domain that walled us an hour ago
+            # says nothing about this proxy now.
+            window = now - self.cooldown_seconds
+            for stale in [key for key, when in seen.items() if when < window]:
+                seen.pop(stale, None)
+            if len(seen) >= max(3, self.max_failures):
+                entry["dead_until"] = now + self.cooldown_seconds
+                entry["failures"] = 0
+                seen.clear()
+                logging.info(
+                    "proxy %s was refused by %d distinct domains — cooled down for %ds",
+                    entry["url"],
+                    max(3, self.max_failures),
+                    self.cooldown_seconds,
+                )
+
     def jar_for(self, entry: dict[str, Any] | None) -> requests.cookies.RequestsCookieJar:
+        """This proxy's cookie jar.
+
+        The jar has to be handed to a session that has *no* cookies of its own,
+        or `requests` merges the two and replays one exit IP's session cookies
+        through every other — which is a stronger correlation signal than
+        sharing the IP would have been. `HttpClient._session_for` supplies such
+        a session, one per proxy.
+        """
         key = entry["url"] if entry else "_direct_"
         with self._lock:
             jar = self._jars.get(key)
@@ -273,7 +483,14 @@ class _ResponseCache:
         )
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_fetched ON http_cache(fetched_at)")
 
-    def get(self, url: str) -> tuple[str, str] | None:
+    def get(self, url: str, max_age: float | None = None) -> tuple[str, str] | None:
+        """The cached body, or None when there is none fresh enough.
+
+        `max_age` lets a caller demand something fresher than the global TTL.
+        A search or index URL is stable in shape and changes every day, so the
+        24 h (configurably 7 d) default meant a daily run re-read a week-old
+        snapshot and `--only-new` produced nothing at all.
+        """
         with self._lock:
             row = self._conn.execute(
                 "SELECT final_url, body, fetched_at FROM http_cache WHERE url=?",
@@ -282,7 +499,8 @@ class _ResponseCache:
         if not row:
             return None
         final_url, body, fetched_at = row
-        if time.time() - (fetched_at or 0) > self.ttl:
+        age_limit = self.ttl if max_age is None else min(self.ttl, max(0.0, max_age))
+        if time.time() - (fetched_at or 0) > age_limit:
             return None
         try:
             text = zlib.decompress(body).decode("utf-8", errors="replace")
@@ -338,6 +556,15 @@ class HttpClient:
         proxy_max_failures: int = 3,
         proxy_cooldown_seconds: int = 300,
         robots_exempt_hosts: tuple[str, ...] = (),
+        use_impersonation: bool = True,
+        use_browser: bool = False,
+        browser_headless: bool = True,
+        browser_concurrency: int = 2,
+        escalate_on_block: bool = True,
+        transport_memory_path: str = ".cache/transport_memory.sqlite",
+        robots_unreadable_is_allowed: bool = True,
+        require_proxy: bool = False,
+        index_cache_ttl_seconds: int = 3600,
     ) -> None:
         self.user_agent = user_agent
         self.delay_seconds = max(0.0, delay_seconds)
@@ -352,7 +579,7 @@ class HttpClient:
         self.ua_pool = DEFAULT_UA_POOL
         self._last_request_at = 0.0
         self._global_lock = threading.Lock()
-        self._robots = RobotsCache()
+        self._robots = RobotsCache(unreadable_is_allowed=robots_unreadable_is_allowed)
         self._session = requests.Session()
         retry = Retry(
             total=max_retries,
@@ -380,6 +607,7 @@ class HttpClient:
         adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=40)
         self._session.mount("http://", adapter)
         self._session.mount("https://", adapter)
+        self._retry_policy = retry
         self._cache: _ResponseCache | None = (
             _ResponseCache(cache_path, cache_ttl_seconds) if cache_enabled else None
         )
@@ -389,9 +617,74 @@ class HttpClient:
             rotation=proxy_rotation,
             max_failures=proxy_max_failures,
             cooldown_seconds=proxy_cooldown_seconds,
+            require_proxy=require_proxy,
         )
+        #: Freshness ceiling for URLs a caller marks as an index or search page.
+        #: Those are stable URLs with changing contents, and serving them from a
+        #: day-old cache is how `--only-new` came back empty on a daily run.
+        self.index_cache_ttl_seconds = max(0, index_cache_ttl_seconds)
+        #: One requests.Session per proxy. A single shared Session pools every
+        #: cookie it is ever handed in `session.cookies` and merges that jar
+        #: into every subsequent request, so the "per-proxy cookie jar" isolated
+        #: nothing: one exit IP's session cookie was replayed through all the
+        #: others, correlating them far more tightly than the shared address
+        #: alone would have. Sessions also give each proxy its own connection
+        #: pool, which is what stops TLS sessions being resumed across exits.
+        self._proxy_sessions: dict[str, requests.Session] = {}
+        self._proxy_session_lock = threading.Lock()
+        self._session_factory = lambda: _configured_session(retry)
         if self._proxies:
             logging.info("HTTP: %d proxies loaded (%s rotation)", len(self._proxies.entries), proxy_rotation)
+
+        # The escalation ladder. Rung 0 is this session, so everything already
+        # configured above — the retry policy, the connection pool — still
+        # applies to the common case; the further rungs only come into play for
+        # hosts that refuse it.
+        self._ladder = build_ladder(
+            self._session,
+            memory_path=transport_memory_path,
+            use_impersonation=use_impersonation,
+            use_browser=use_browser,
+            headless=browser_headless,
+            browser_concurrency=browser_concurrency,
+            escalate=escalate_on_block,
+            remember=cache_enabled,
+        )
+        # robots.txt now travels the same road as everything else: same proxy,
+        # same browser identity, same TLS fingerprint. Fetching it with bare
+        # urllib meant the first request to every host went out from the real
+        # egress IP looking like a bot, which is both an IP leak and the single
+        # most likely request in the run to be refused.
+        self._robots.set_fetcher(self._fetch_robots)
+
+    def _session_for(self, proxy_url: str):
+        """The Session this egress uses. One per proxy, never shared.
+
+        Each is created with an empty cookie jar and kept that way: cookies for
+        a fetch are passed per-request from `_ProxyPool.jar_for`, and a Session
+        that has accumulated its own would merge them in.
+        """
+        if not proxy_url:
+            return self._session
+        with self._proxy_session_lock:
+            session = self._proxy_sessions.get(proxy_url)
+            if session is None:
+                session = _configured_session(self._retry_policy, _bind_address(proxy_url))
+                self._proxy_sessions[proxy_url] = session
+            return session
+
+    def _proxy_refused(self, url: str) -> FetchResponse:
+        """The response for a fetch we declined to make without a proxy."""
+        logging.warning(
+            "refusing %s: every proxy is cooling down and require_proxy is set. "
+            "Connecting directly here would expose the real IP.",
+            url,
+        )
+        return FetchResponse(
+            url=url,
+            outcome=Outcome.ERROR,
+            error="proxy pool exhausted and require_proxy is set",
+        )
 
     def close(self) -> None:
         """Release the connection pool and the SQLite cache handle.
@@ -399,8 +692,19 @@ class HttpClient:
         Long runs that create several clients (tools/, tests) otherwise leak an
         open sqlite connection and a pool of sockets per client.
         """
+        ladder = getattr(self, "_ladder", None)
+        if ladder is not None:
+            # Closes the browser rung too. A leaked Chromium outlives the run
+            # and holds its profile directory open.
+            with suppress(Exception):
+                ladder.close()
         with suppress(Exception):
             self._session.close()
+        with self._proxy_session_lock:
+            for session in self._proxy_sessions.values():
+                with suppress(Exception):
+                    session.close()
+            self._proxy_sessions.clear()
         if self._cache is not None:
             self._cache.close()
 
@@ -417,9 +721,21 @@ class HttpClient:
     def proxy_stats(self) -> list[dict[str, Any]]:
         return self._proxies.stats()
 
-    def _pick_ua(self) -> str:
-        if self.rotate_user_agents and self.ua_pool:
-            return random.choice(self.ua_pool)
+    def transport_stats(self) -> list[dict[str, Any]]:
+        """Which domains needed which rung. Empty when memory is disabled."""
+        memory = getattr(self._ladder, "memory", None)
+        return memory.stats() if memory is not None else []
+
+    def _pick_ua(self, host: str = "") -> str:
+        """The User-Agent this host sees.
+
+        Derived from the hostname rather than drawn at random per request. A
+        browser does not change what it is between two page loads, and the
+        previous behaviour — a fresh random UA every time — meant one host saw
+        Chrome, then Safari, then Firefox arrive over a single connection.
+        """
+        if self.rotate_user_agents:
+            return identity_for(host).user_agent
         return self.user_agent
 
     @staticmethod
@@ -455,61 +771,75 @@ class HttpClient:
         if not entry:
             return None
         url = entry.get("url") or ""
-        if not url:
+        # A `bind://` entry names a local source address, which the session's
+        # adapter applies. It is not an upstream proxy and must never be handed
+        # to `requests` as one.
+        if not url or _bind_address(url):
             return None
         return {"http": url, "https": url}
 
     @staticmethod
-    def _stealth_headers(url: str, ua: str) -> dict[str, str]:
-        """Browser-like default headers, including modern Sec-Fetch-* + Sec-CH-UA hints."""
-        host = urlparse(url).netloc
-        is_chromium = "Chrome" in ua and "Edg" not in ua and "Safari" in ua
-        is_firefox = "Firefox" in ua
-        h: dict[str, str] = {
-            "User-Agent": ua,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,image/avif,image/webp,*/*;q=0.7",
-            "Accept-Language": "en-US,en;q=0.9,de;q=0.8,fr;q=0.7,it;q=0.6",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Sec-Fetch-Site": "same-origin",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-User": "?1",
-            "Sec-Fetch-Dest": "document",
-            "Upgrade-Insecure-Requests": "1",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache",
-            "DNT": "1",
-        }
-        if is_chromium:
-            h["Sec-CH-UA"] = '"Chromium";v="120", "Not A(Brand";v="99", "Google Chrome";v="120"'
-            h["Sec-CH-UA-Mobile"] = "?0"
-            h["Sec-CH-UA-Platform"] = (
-                '"Windows"' if "Windows" in ua else ('"macOS"' if "Macintosh" in ua else '"Linux"')
-            )
-        if is_firefox:
-            h["TE"] = "trailers"
-        # Plausible referer for detail pages
-        if "/detail/" in url or "/job/" in url or "/jobs/" in url:
-            h["Referer"] = f"https://{host}/"
-        return h
+    def _stealth_headers(url: str, ua: str = "") -> dict[str, str]:
+        """Browser-like headers for a URL. Delegates to `identity`.
 
-    def get(
+        The version this replaced built the header set by hand and pinned
+        `Sec-CH-UA` to Chromium 120 regardless of which User-Agent it had drawn
+        — so a Safari UA arrived announcing itself as Chrome, which no real
+        browser does. It also sent `Sec-Fetch-Site: same-origin` on first
+        contact with a host, where a browser sends `none`. Both were stronger
+        bot signals than sending nothing at all.
+        """
+        host = urlparse(url).netloc
+        identity = identity_for(host)
+        # A detail page is plausibly reached from the site's own index, and a
+        # Referer makes `Sec-Fetch-Site: same-origin` truthful rather than the
+        # contradiction it used to be.
+        referer = f"https://{host}/" if any(s in url for s in ("/detail/", "/job/", "/jobs/")) else None
+        return headers_for(url, identity, country=country_for_host(host), referer=referer)
+
+    def fetch(
         self,
         url: str,
         headers: dict[str, str] | None = None,
-        allow_404: bool = False,
+        *,
         use_cache: bool = True,
-    ) -> tuple[str, str] | None:
+        country: str | None = None,
+        max_rung: int | None = None,
+        max_age: float | None = None,
+        is_index: bool = False,
+    ) -> FetchResponse:
+        """Fetch a URL and report what actually happened.
+
+        This is the API to prefer. `get()` below flattens the result to
+        "text or nothing", which cannot express the difference between a page
+        that had no content and a bot wall that refused to show us one — and
+        that difference is the whole diagnosis when a run comes back empty.
+        """
         if not self._robots_allow(url):
             logging.debug("robots disallow %s", url)
-            return None
+            return FetchResponse(
+                url=url, outcome=Outcome.ROBOTS_DENIED, error="robots.txt disallows this URL"
+            )
+        if max_age is None and (is_index or _looks_like_index(url)):
+            max_age = float(self.index_cache_ttl_seconds)
         if use_cache and self._cache is not None:
-            cached = self._cache.get(url)
+            cached = self._cache.get(url, max_age=max_age)
             if cached is not None:
-                return cached
+                final_url, text = cached
+                return FetchResponse(
+                    url=url,
+                    final_url=final_url,
+                    status=200,
+                    text=text,
+                    outcome=Outcome.OK,
+                    transport="cache",
+                )
         self._global_pace()
         host = self._hostname(url)
         proxy_entry = self._proxies.acquire() if self._proxies else None
         proxy_url = (proxy_entry or {}).get("url", "")
+        if proxy_entry is None and self._proxies.require_proxy and self._proxies.exhausted:
+            return self._proxy_refused(url)
         throttle_key = f"{host}|{proxy_url}"
         self._throttle.acquire(throttle_key)
         # Backing off is this caller's penalty, not a reason to keep holding a
@@ -517,91 +847,142 @@ class HttpClient:
         # release below.
         backoff_seconds = 0.0
         try:
-            ua = self._pick_ua()
-            merged = self._stealth_headers(url, ua)
-            if headers:
-                merged.update(headers)
+            # The identity is salted with the proxy, so moving to a new egress
+            # IP also means presenting a different browser. Keeping the old one
+            # would hand the site a correlation between the two addresses.
+            identity = identity_for(host, salt=proxy_url)
             jar = self._proxies.jar_for(proxy_entry)
-            try:
-                response = self._session.get(
-                    url,
-                    headers=merged,
-                    timeout=self.timeout_seconds,
-                    allow_redirects=True,
-                    proxies=self._proxies_dict(proxy_entry),
-                    cookies=jar,
-                )
-                # Persist cookies into the per-proxy jar
-                jar.update(response.cookies)
-            except requests.RequestException as exc:
-                logging.debug("HTTP error %s: %s", url, exc)
-                self._proxies.report_failure(proxy_entry)
-                return None
-            if response.status_code == 429:
-                backoff_seconds = _retry_after_seconds(response.headers.get("Retry-After"))
+            # A `bind://` entry selects a local source address, not an upstream
+            # proxy — the session carries it, and passing it on as a proxy URL
+            # would simply fail to connect.
+            upstream = "" if _bind_address(proxy_url) else proxy_url
+            result = self._ladder.fetch(
+                url,
+                headers=headers,
+                proxy=upstream or None,
+                session=self._session_for(proxy_url),
+                timeout=self.timeout_seconds,
+                identity=identity,
+                country=country or country_for_host(host),
+                cookies=jar,
+                max_rung=max_rung,
+            )
+            # Attribution matters here. A 403 or a 429 is the *host* refusing
+            # us; charging that to the proxy meant one stubborn site burned the
+            # entire pool and the run fell back to a direct connection. Only a
+            # transport-level failure — connect refused, TLS, timeout — is the
+            # proxy's own fault.
+            domain = registrable_domain(url)
+            if result.outcome is Outcome.RATE_LIMITED:
+                backoff_seconds = result.retry_after or _DEFAULT_RETRY_AFTER_SECONDS
                 logging.info("429 from %s — backing off %.1fs", url, backoff_seconds)
+                self._proxies.report_block(proxy_entry, domain)
+            elif result.outcome is Outcome.BLOCKED:
+                self._proxies.report_block(proxy_entry, domain)
+            elif result.outcome is Outcome.ERROR:
                 self._proxies.report_failure(proxy_entry)
-                return None
-            if response.status_code == 403:
-                # WAF / proxy block
-                self._proxies.report_failure(proxy_entry)
-                return None
-            if response.status_code >= 400 and not allow_404:
-                logging.debug("HTTP %s %s", response.status_code, url)
-                return None
-            # requests falls back to ISO-8859-1 whenever a text/* response omits
-            # charset, which mangles UTF-8 Norwegian/German pages. Only pay for
-            # charset sniffing (a full-body scan) in that specific case.
-            if not response.encoding or response.encoding.lower() in ("iso-8859-1", "latin-1"):
-                response.encoding = response.apparent_encoding or "utf-8"
-            final_url = response.url
-            text = response.text
-            if _looks_like_block(text):
-                self._proxies.report_failure(proxy_entry)
-                logging.debug("WAF/block at %s — signaling retry", url)
-                return None
-            self._proxies.report_success(proxy_entry)
-            # `allow_404` lets an error body reach the caller (probes read the
-            # body to tell "no such board" from "wrong host"). It must not also
-            # pin that error page in the cache for the whole TTL, which is how a
-            # transient 503 turned into a day of empty results.
-            if self._cache is not None and use_cache and response.status_code < 400:
-                self._cache.put(url, final_url, text)
-            return final_url, text
+            else:
+                self._proxies.report_success(proxy_entry)
+            # Only a genuinely good response is cached. Pinning an error page
+            # for the whole TTL is how a transient 503 became a day of empty
+            # results.
+            if result.ok and self._cache is not None and use_cache:
+                self._cache.put(url, result.final_url or url, result.text)
+            return result
         finally:
             self._throttle.release(throttle_key)
             if backoff_seconds > 0:
                 time.sleep(backoff_seconds)
+
+    def get(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        allow_404: bool = False,
+        use_cache: bool = True,
+        max_age: float | None = None,
+        is_index: bool = False,
+    ) -> tuple[str, str] | None:
+        """(final_url, text), or None. Kept for the callers that only want the
+        body; `fetch()` carries the reason when there isn't one."""
+        result = self.fetch(url, headers, use_cache=use_cache, max_age=max_age, is_index=is_index)
+        if result.ok:
+            return result.final_url or url, result.text
+        # `allow_404` lets an error body reach the caller — board probes read it
+        # to tell "no such board" from "wrong host". A block is still withheld:
+        # handing back a challenge page as though it were content is how the
+        # parser ends up mining a CAPTCHA for job listings.
+        if allow_404 and result.text and result.outcome in (Outcome.NOT_FOUND, Outcome.SERVER_ERROR):
+            return result.final_url or url, result.text
+        return None
+
+    def _fetch_robots(self, robots_url: str) -> tuple[int, str] | None:
+        """Fetch robots.txt the same way we fetch everything else.
+
+        Deliberately bypasses `fetch()`: that method consults robots first, and
+        this is the call it would consult. Capped at the impersonation rung —
+        launching a browser to read a text file is never worth it.
+        """
+        host = self._hostname(robots_url)
+        proxy_entry = self._proxies.acquire() if self._proxies else None
+        proxy_url = (proxy_entry or {}).get("url", "")
+        result = self._ladder.fetch(
+            robots_url,
+            proxy=proxy_url or None,
+            timeout=min(self.timeout_seconds, 10.0),
+            identity=identity_for(host, salt=proxy_url),
+            country=country_for_host(host),
+            max_rung=1,
+        )
+        if not result.status:
+            return None
+        return result.status, result.text
 
     def head(self, url: str) -> int | None:
         if not self._robots_allow(url):
             logging.debug("robots disallow (HEAD) %s", url)
             return None
         host = self._hostname(url)
-        self._throttle.acquire(f"{host}|")
+        # A HEAD that skipped the proxy pool would send the operator's real
+        # address to a host every other request was careful to reach through a
+        # proxy — which defeats the point of configuring one at all.
+        proxy_entry = self._proxies.acquire() if self._proxies else None
+        proxy_url = (proxy_entry or {}).get("url", "")
+        throttle_key = f"{host}|{proxy_url}"
+        self._throttle.acquire(throttle_key)
         try:
-            r = self._session.head(
+            identity = identity_for(host, salt=proxy_url)
+            r = self._session_for(proxy_url).head(
                 url,
-                headers={"User-Agent": self._pick_ua()},
+                headers=headers_for(url, identity, country=country_for_host(host)),
                 timeout=self.timeout_seconds,
                 allow_redirects=True,
+                proxies=self._proxies_dict(proxy_entry),
+                verify=True,
             )
+            if r.status_code < 400:
+                self._proxies.report_success(proxy_entry)
+            elif r.status_code in (401, 403, 429):
+                self._proxies.report_block(proxy_entry, registrable_domain(url))
             return r.status_code
         except requests.RequestException:
+            self._proxies.report_failure(proxy_entry)
             return None
         finally:
-            self._throttle.release(f"{host}|")
+            self._throttle.release(throttle_key)
 
     def get_json(
         self,
         url: str,
         headers: dict[str, str] | None = None,
         use_cache: bool = True,
+        max_age: float | None = None,
+        is_index: bool = False,
     ) -> Any | None:
         merged = {"Accept": "application/json"}
         if headers:
             merged.update(headers)
-        result = self.get(url, headers=merged, use_cache=use_cache)
+        result = self.get(url, headers=merged, use_cache=use_cache, max_age=max_age, is_index=is_index)
         if result is None:
             return None
         _, body = result
@@ -630,11 +1011,21 @@ class HttpClient:
         # to hold a slot every other worker is queued on. Slept after release.
         backoff_seconds = 0.0
         try:
-            merged = {
-                "User-Agent": self._pick_ua(),
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            }
+            identity = identity_for(host, salt=proxy_url)
+            merged = headers_for(url, identity, country=country_for_host(host))
+            merged.update(
+                {
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    # An XHR is not a top-level navigation, and claiming to be
+                    # one is a contradiction a WAF can test for.
+                    "Sec-Fetch-Mode": "cors",
+                    "Sec-Fetch-Dest": "empty",
+                    "Sec-Fetch-Site": "same-origin",
+                }
+            )
+            merged.pop("Sec-Fetch-User", None)
+            merged.pop("Upgrade-Insecure-Requests", None)
             if headers:
                 merged.update(headers)
             try:

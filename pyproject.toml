@@ -33,11 +33,20 @@ dependencies = [
     "dnspython>=2.6.1",
     "tldextract>=5.1.2",
     "playwright>=1.45.0",
+    # Real browser TLS/HTTP2 fingerprint. See requirements.txt for why this is
+    # the highest-yield anti-blocking dependency in the list.
+    "curl_cffi>=0.7.0",
+    # SOCKS5 support for requests, so `socks5h://` proxies work.
+    "PySocks>=1.7.1",
 ]
 
 [project.optional-dependencies]
 exports = ["gspread>=6.1.2", "google-auth>=2.33.0", "notion-client>=2.2.1"]
 llm = ["anthropic>=0.42.0"]
+# The last rung of the transport ladder. Patchright is a drop-in Playwright
+# fork with the automation tells removed — chiefly the `Runtime.enable` CDP
+# call, which is the first thing Cloudflare and DataDome look for.
+stealth = ["patchright>=1.45.0"]
 dev = [
     "ruff>=0.4.0",
     "black>=24.4.0",

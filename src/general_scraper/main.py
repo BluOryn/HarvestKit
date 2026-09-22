@@ -79,6 +79,15 @@ def main() -> None:
         cache_ttl_seconds=config.run.cache_ttl_seconds,
         cache_path=config.run.cache_path,
         rotate_user_agents=config.run.rotate_user_agents,
+        use_impersonation=config.run.use_impersonation,
+        use_browser=config.run.use_stealth_browser,
+        browser_headless=config.run.stealth_browser_headless,
+        browser_concurrency=config.run.stealth_browser_concurrency,
+        escalate_on_block=config.run.escalate_on_block,
+        transport_memory_path=config.run.transport_memory_path,
+        robots_unreadable_is_allowed=config.run.robots_unreadable_is_allowed,
+        require_proxy=config.run.require_proxy,
+        index_cache_ttl_seconds=config.run.index_cache_ttl_seconds,
     )
 
     output_path = args.output or config.csv.path
@@ -90,7 +99,7 @@ def main() -> None:
     pw: PlaywrightFetcher | None = None
     if config.run.use_playwright:
         try:
-            pw = PlaywrightFetcher().__enter__()
+            pw = PlaywrightFetcher(http=http).__enter__()
         except Exception as exc:
             logging.warning("Playwright failed to start: %s — continuing without it.", exc)
             pw = None

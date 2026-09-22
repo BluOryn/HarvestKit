@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from leadgen import net_guard
-from leadgen.net_guard import is_safe_url
+# The implementation lives in job_scraper so the transport layer can guard
+# redirect hops with it; leadgen.net_guard re-exports it.
+from job_scraper import net_guard
+from job_scraper.net_guard import is_safe_url
 
 
 @pytest.fixture(autouse=True)

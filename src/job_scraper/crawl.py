@@ -21,26 +21,14 @@ from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
+from . import browser
 from .http import HttpClient
+from .identity import accept_language_for, country_for_host, identity_for
+from .transport import Outcome, classify_rendered
 
-COOKIE_BUTTON_SELECTORS = [
-    "#onetrust-accept-btn-handler",
-    "button[aria-label*='accept' i]",
-    "button[aria-label*='agree' i]",
-    "button:has-text('Accept all')",
-    "button:has-text('Accept')",
-    "button:has-text('I agree')",
-    "button:has-text('Got it')",
-    "button:has-text('Allow all')",
-    "button:has-text('Akzeptieren')",
-    "button:has-text('Alle akzeptieren')",
-    "button:has-text('Tout accepter')",
-    "[class*='cookie'] button[class*='accept']",
-    "[class*='consent'] button[class*='accept']",
-    "[class*='gdpr'] button:not([class*='reject'])",
-    ".cc-dismiss",
-    ".cc-allow",
-]
+# The consent-wall selectors live in `browser` now, so the crawler and the
+# transport ladder cannot drift into dismissing different dialogs.
+COOKIE_BUTTON_SELECTORS = browser.COOKIE_BUTTON_SELECTORS
 
 EXPAND_SELECTORS_TEXT = [
     "Show more",
@@ -95,6 +83,24 @@ SKIP_EXTENSIONS = (
 )
 
 
+# Evaluated in the page: true once something recognisably job-shaped exists.
+_JOB_CONTENT_PREDICATE = """
+() => {
+  const lds = document.querySelectorAll('script[type="application/ld+json"]');
+  for (const el of lds) {
+    try {
+      const d = JSON.parse(el.textContent || 'null');
+      const flat = (Array.isArray(d) ? d : [d]).flatMap(x => x && x['@graph'] ? x['@graph'] : [x]);
+      if (flat.some(x => x && (x['@type'] === 'JobPosting' || (Array.isArray(x['@type']) && x['@type'].includes('JobPosting'))))) return true;
+    } catch {}
+  }
+  if (document.querySelector('[itemtype*="schema.org/JobPosting" i]')) return true;
+  if (document.querySelectorAll('a[href*="/job/"], a[href*="/joboffer/"], a[href*="/vacancies/"], a[href*="/stellenangebote/"], [data-jk], [data-advert], article[data-at="job-item"]').length >= 3) return true;
+  return false;
+}
+"""
+
+
 @dataclass
 class Page:
     url: str
@@ -102,97 +108,144 @@ class Page:
 
 
 class PlaywrightFetcher:
-    """Single persistent browser; thread-safe-ish (caller serializes)."""
+    """A browser fetcher that egresses where it is told to and admits failure.
 
-    def __init__(self, timeout_ms: int = 30000, headless: bool = True) -> None:
+    Three things this class used to get wrong are worth naming, because each one
+    was silent:
+
+    * It connected **directly**, ignoring the proxy pool entirely, so the one
+      fetch path used against the most hostile sites was the only one sending
+      the operator's real address.
+    * `goto()` was wrapped in `suppress(Exception)` and the method then returned
+      `page.url, page.content()` regardless — so a failed navigation produced an
+      empty `about:blank` DOM that the HTTP cache stored as a success for 24 h.
+    * Plain headless Chromium is trivially fingerprinted: `navigator.webdriver`
+      is set and `userAgentData` still says `HeadlessChrome` however the UA
+      string is spoofed.
+
+    It is also safe to call from a worker thread now — the driver lives on its
+    own thread (`browser.BrowserWorker`) rather than being locked around, which
+    is the only thing that fixes Playwright's greenlet pinning.
+    """
+
+    def __init__(
+        self,
+        timeout_ms: int = 30000,
+        headless: bool = True,
+        *,
+        proxy: str | None = None,
+        http: HttpClient | None = None,
+    ) -> None:
         self.timeout_ms = timeout_ms
         self.headless = headless
-        self._playwright = None
-        self._browser = None
-        self._context = None
+        #: A fixed proxy for every fetch. When `http` is given instead, a proxy
+        #: is drawn from its pool per fetch, which is what rotates.
+        self.proxy = proxy
+        self._http = http
+        self._worker = browser.BrowserWorker(headless=headless)
 
     def __enter__(self) -> "PlaywrightFetcher":
-        try:
-            from playwright.sync_api import sync_playwright
-        except Exception as exc:
+        if not self._worker.start():
             raise RuntimeError(
-                "Playwright is not installed. Run: pip install playwright && playwright install chromium"
-            ) from exc
-        self._playwright = sync_playwright().start()
-        self._browser = self._playwright.chromium.launch(headless=self.headless)
-        self._context = self._browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1366, "height": 900},
-            locale="en-US",
-            extra_http_headers={"Accept-Language": "en-US,en;q=0.9,de;q=0.8,fr;q=0.7"},
-        )
-        # Block heavy resources to speed up — jobs.ch has hundreds of images/fonts.
-        self._context.route("**/*.{png,jpg,jpeg,gif,svg,woff,woff2,ttf,otf,mp4,webm}", lambda r: r.abort())
+                "Playwright is not installed or could not launch. Run: "
+                "pip install playwright && playwright install chromium"
+            )
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        with suppress(Exception):
-            if self._context is not None:
-                self._context.close()
-            if self._browser is not None:
-                self._browser.close()
-            if self._playwright is not None:
-                self._playwright.stop()
+        self._worker.close()
+
+    def _proxy_for(self) -> tuple[str | None, object | None]:
+        """(proxy url, pool entry) for this fetch."""
+        if self.proxy:
+            return self.proxy, None
+        pool = getattr(self._http, "_proxies", None) if self._http is not None else None
+        if pool is None:
+            return None, None
+        entry = pool.acquire()
+        return ((entry or {}).get("url") or None), entry
 
     def get(self, url: str) -> tuple[str, str] | None:
-        if self._context is None:
-            return None
-        page = self._context.new_page()
+        """(final_url, html), or None when nothing was actually fetched."""
+        proxy, entry = self._proxy_for()
+        host = urlparse(url).hostname or ""
+        identity = identity_for(host, salt=proxy or "")
+        accept_language = accept_language_for(host, country_for_host(host))
+        timeout_ms = self.timeout_ms
+
+        def _run(browser_obj):
+            context = None
+            try:
+                context = browser.new_context(
+                    browser_obj,
+                    user_agent=identity.user_agent,
+                    locale=accept_language.split(",")[0],
+                    accept_language=accept_language,
+                    proxy=proxy,
+                )
+                page = context.new_page()
+                # 'networkidle' is brittle on SPAs; domcontentloaded plus the
+                # content wait below is both faster and more reliable.
+                response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                if response is None:
+                    return None
+                status = response.status
+                PlaywrightFetcher._dismiss_overlays(page)
+                PlaywrightFetcher._wait_for_job_content(page)
+                PlaywrightFetcher._expand_content(page)
+                return page.url, page.content(), status
+            finally:
+                if context is not None:
+                    with suppress(Exception):
+                        context.close()
+
         try:
-            with suppress(Exception):
-                # 'networkidle' is brittle on SPAs; domcontentloaded + manual wait is safer.
-                page.goto(url, wait_until="domcontentloaded", timeout=self.timeout_ms)
-            self._dismiss_overlays(page)
-            self._wait_for_job_content(page)
-            self._expand_content(page)
-            return page.url, page.content()
+            result = self._worker.submit(_run, timeout=max(30.0, timeout_ms / 1000 * 3))
         except Exception as exc:
             logging.debug("playwright fetch failed for %s: %s", url, exc)
+            self._report(entry, ok=False)
             return None
-        finally:
-            with suppress(Exception):
-                page.close()
+        if result is None:
+            logging.debug("playwright: no navigation response for %s", url)
+            self._report(entry, ok=False)
+            return None
+        final_url, html, status = result
+        outcome = classify_rendered(status, html)
+        if outcome is not Outcome.OK:
+            # Handing a challenge page back as content is how a CAPTCHA ended
+            # up being mined for job listings.
+            logging.debug("playwright: %s -> %s (%d)", url, outcome.value, status)
+            self._report(entry, ok=False)
+            return None
+        self._report(entry, ok=True)
+        return final_url, html
 
-    def _dismiss_overlays(self, page) -> None:
-        for sel in COOKIE_BUTTON_SELECTORS:
-            with suppress(Exception):
-                btn = page.query_selector(sel)
-                if btn:
-                    btn.click(timeout=1500)
-                    page.wait_for_timeout(200)
-                    break
+    def _report(self, entry, *, ok: bool) -> None:
+        pool = getattr(self._http, "_proxies", None) if self._http is not None else None
+        if pool is None or entry is None:
+            return
+        with suppress(Exception):
+            if ok:
+                pool.report_success(entry)
+            else:
+                pool.report_failure(entry)
 
-    def _wait_for_job_content(self, page) -> None:
-        # Race: JSON-LD JobPosting → microdata → known card selectors → 6s timeout.
+    @staticmethod
+    def _dismiss_overlays(page) -> None:
+        with suppress(Exception):
+            browser.dismiss_consent(page)
+
+    @staticmethod
+    def _wait_for_job_content(page) -> None:
+        # Race: JSON-LD JobPosting -> microdata -> known card selectors -> 6s timeout.
         with suppress(Exception):
             page.wait_for_function(
-                """
-                () => {
-                  const lds = document.querySelectorAll('script[type="application/ld+json"]');
-                  for (const el of lds) {
-                    try {
-                      const d = JSON.parse(el.textContent || 'null');
-                      const flat = (Array.isArray(d) ? d : [d]).flatMap(x => x && x['@graph'] ? x['@graph'] : [x]);
-                      if (flat.some(x => x && (x['@type'] === 'JobPosting' || (Array.isArray(x['@type']) && x['@type'].includes('JobPosting'))))) return true;
-                    } catch {}
-                  }
-                  if (document.querySelector('[itemtype*="schema.org/JobPosting" i]')) return true;
-                  if (document.querySelectorAll('a[href*="/job/"], a[href*="/joboffer/"], a[href*="/vacancies/"], a[href*="/stellenangebote/"], [data-jk], [data-advert], article[data-at="job-item"]').length >= 3) return true;
-                  return false;
-                }
-                """,
+                _JOB_CONTENT_PREDICATE,
                 timeout=6000,
             )
 
-    def _expand_content(self, page) -> None:
+    @staticmethod
+    def _expand_content(page) -> None:
         for label in EXPAND_SELECTORS_TEXT:
             with suppress(Exception):
                 page.get_by_role("button", name=label).click(timeout=800)
@@ -223,7 +276,9 @@ class Crawler:
         fetcher = None
         if self.use_playwright:
             try:
-                fetcher = PlaywrightFetcher()
+                # Sharing the client's proxy pool: a browser connecting
+                # directly would defeat every proxy the run is configured with.
+                fetcher = PlaywrightFetcher(http=self.http)
                 fetcher.__enter__()
             except Exception as exc:
                 logging.warning("Playwright unavailable (%s) — crawling over plain HTTP", exc)

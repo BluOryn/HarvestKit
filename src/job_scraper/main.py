@@ -65,6 +65,15 @@ def main() -> None:
         proxy_rotation=config.run.proxy_rotation,
         proxy_max_failures=config.run.proxy_max_failures,
         proxy_cooldown_seconds=config.run.proxy_cooldown_seconds,
+        use_impersonation=config.run.use_impersonation,
+        use_browser=config.run.use_stealth_browser,
+        browser_headless=config.run.stealth_browser_headless,
+        browser_concurrency=config.run.stealth_browser_concurrency,
+        escalate_on_block=config.run.escalate_on_block,
+        transport_memory_path=config.run.transport_memory_path,
+        robots_unreadable_is_allowed=config.run.robots_unreadable_is_allowed,
+        require_proxy=config.run.require_proxy,
+        index_cache_ttl_seconds=config.run.index_cache_ttl_seconds,
     )
     if http.has_proxies:
         # With proxies, we can scale per-host concurrency without hitting rate limits.
@@ -97,7 +106,7 @@ def main() -> None:
     if config.run.use_playwright:
         deep_cfg.use_playwright_fallback = True
         try:
-            pw_fetcher = PlaywrightFetcher().__enter__()
+            pw_fetcher = PlaywrightFetcher(http=http).__enter__()
         except Exception as exc:
             logging.warning("Playwright init failed: %s — falling back to HTTP-only", exc)
             pw_fetcher = None
